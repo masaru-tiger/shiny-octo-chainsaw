@@ -1,0 +1,6 @@
+streamlit
+pandas
+Pillow
+pyzbar
+requests
+beautifulsoup4
