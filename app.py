@@ -14,12 +14,21 @@ import urllib.parse
 def init_connection():
     try:
         db_conf = st.secrets["database"]
+        # パスワードを安全にエンコード（特殊文字対策）
         safe_password = urllib.parse.quote_plus(db_conf['password'])
+        
+        # 【修正ポイント】?pgbouncer=true を削除し、ポート6543を指定
         db_url = (
             f"postgresql://{db_conf['user']}:{safe_password}@"
-            f"{db_conf['host']}:{db_conf['port']}/{db_conf['database']}?pgbouncer=true"
+            f"{db_conf['host']}:6543/{db_conf['database']}"
         )
-        return create_engine(db_url, pool_pre_ping=True)
+        
+        # SSL接続を必須にする設定を追加して安定化
+        return create_engine(
+            db_url, 
+            connect_args={'sslmode': 'require'}, 
+            pool_pre_ping=True
+        )
     except Exception as e:
         st.error(f"接続設定エラー: {e}")
         st.stop()
