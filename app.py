@@ -123,15 +123,15 @@ def show_registration(user_info):
     
     scanned_jan, auto_name, auto_cat = "", "", ""
     
-    # 既存の分類・商品リストをDBから取得
+    # 既存データをDBから取得
     with engine.connect() as conn:
         existing_data = conn.execute(
             text("SELECT DISTINCT category, name, jan_code FROM items WHERE group_id=:gid"), 
             {"gid": view_id}
         ).fetchall()
     
+    # 全体の分類リスト作成
     cat_list = sorted(list(set([r[0] for r in existing_data if r[0]])))
-    name_list = sorted(list(set([r[1] for r in existing_data if r[1]])))
 
     # スキャン処理
     if img_file:
@@ -151,10 +151,8 @@ def show_registration(user_info):
 
     st.divider()
 
-    # 次回購入日を計算して表示するヘルパー関数
     def announce_next_date(qty, rate, threshold, label):
         if rate > 0:
-            # (現在数 - しきい値) / 1日の消費 = あと何日もつか
             days_left = (qty - threshold) / rate
             next_date = datetime.now() + pd.Timedelta(days=max(0, days_left))
             date_str = next_date.strftime('%Y/%m/%d')
@@ -163,8 +161,8 @@ def show_registration(user_info):
         else:
             st.success(f"✅ 「{label}」の登録が完了しました！")
 
-    with st.form("inventory_form", clear_on_submit=True):
-        if reg_mode == "新規分類・商品の登録":
+    if reg_mode == "新規分類・商品の登録":
+        with st.form("registration_form", clear_on_submit=True):
             st.subheader("🆕 新規マスタ登録")
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
             new_cat = st.text_input("分類を直接入力（新規の場合）")
@@ -192,23 +190,40 @@ def show_registration(user_info):
                                "qty": qty_f, "rate": rate_f, "alert": alert_f, "today": datetime.now().date()})
                     announce_next_date(qty_f, rate_f, alert_f, f_cat)
 
-        else:
-            st.subheader("➕ 在庫の加算")
-            col_a, col_b = st.columns(2)
-            sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, 
-                                          index=cat_list.index(auto_cat)+1 if auto_cat in cat_list else 0)
-            f_cat_manual = col_a.text_input("分類を直接入力", value=auto_cat if not auto_cat in cat_list else "")
-            
-            sel_name_add = col_b.selectbox("商品名を選択", ["（直接入力）"] + name_list,
-                                           index=name_list.index(auto_name)+1 if auto_name in name_list else 0)
-            f_name_manual = col_b.text_input("商品名を直接入力/スキャン結果", value=auto_name if not auto_name in name_list else "")
-            
+    else:
+        st.subheader("➕ 在庫の加算")
+        # フォームの外で分類を選択させる（動的なプルダウン更新のため）
+        col_a, col_b = st.columns(2)
+        
+        # 1. 分類の選択
+        sel_cat_add = col_a.selectbox(
+            "分類を選択", 
+            ["（直接入力）"] + cat_list, 
+            index=cat_list.index(auto_cat)+1 if auto_cat in cat_list else 0,
+            key="cat_selector"
+        )
+        f_cat_manual = col_a.text_input("分類を直接入力", value=auto_cat if not auto_cat in cat_list else "")
+        current_cat = sel_cat_add if sel_cat_add != "（直接入力）" else f_cat_manual
+
+        # 2. 選択された分類に基づいて商品リストをフィルタリング
+        filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
+        
+        # 3. 商品名の選択
+        sel_name_add = col_b.selectbox(
+            f"「{current_cat}」の商品名を選択", 
+            ["（直接入力）"] + filtered_names,
+            index=filtered_names.index(auto_name)+1 if auto_name in filtered_names else 0,
+            key="name_selector"
+        )
+        f_name_manual = col_b.text_input("商品名を直接入力/スキャン結果", value=auto_name if not auto_name in filtered_names else "")
+
+        with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード (スキャン時は自動入力)", value=scanned_jan)
             f_add_qty = st.text_input("追加数", value="1.0")
             
             if st.form_submit_button("在庫を加算"):
                 t_jan = f_jan_add
-                t_cat = sel_cat_add if sel_cat_add != "（直接入力）" else f_cat_manual
+                t_cat = current_cat
                 t_name = sel_name_add if sel_name_add != "（直接入力）" else f_name_manual
                 add_val = float(f_add_qty)
                 
@@ -224,7 +239,6 @@ def show_registration(user_info):
                            "jan": t_jan, "cat": t_cat, "name": t_name, "gid": view_id})
                 
                 if res.rowcount > 0:
-                    # 更新後の最新値を取得して次回購入日を表示
                     with engine.connect() as conn:
                         new_data = conn.execute(text("""
                             SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) 
@@ -234,7 +248,7 @@ def show_registration(user_info):
                             announce_next_date(new_data[0], new_data[1], new_data[2], t_cat)
                 else:
                     st.error("一致する商品が見つかりません。新規登録してください。")
-
+                    
 def show_edit_delete(user_info):
     view_id = st.session_state.view_group_id
     st.header("🔧 在庫の編集・削除")
