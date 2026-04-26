@@ -240,7 +240,7 @@ def show_admin_tool():
         # 履歴データの取得 (LEFT JOINで名前を紐付け。名前が取れなくても全行出す)
         df_history = pd.read_sql("""
             SELECT 
-                h.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tokyo' as "更新日時",
+                (h.created_at + INTERVAL '9 hours') as "更新日時",
                 i.category as "分類",
                 i.name as "商品名",
                 h.change_qty as "加算数",
