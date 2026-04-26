@@ -192,7 +192,11 @@ def show_registration(user_info):
                             st.success(f"在庫を加算しました！（現在庫: {new_qty}）")
                             if daily_rate > 0:
                                 days_left = int(new_qty / daily_rate)
-                                next_date = datetime.now() + timedelta(days=days_left)
+
+                                # Python側でも日本時間を基準にする（UTC+9）
+                                from datetime import timezone
+                                jst_now = datetime.now(timezone(timedelta(hours=9)))
+                                next_date = jst_now + timedelta(days=days_left)
                                 st.info(f"💡 次回の購入予定日は **{next_date.strftime('%Y/%m/%d')}** です（残り約{days_left}日分）")
                             else:
                                 st.warning("⚠️ 1日の消費量が0に設定されているため、予測日を計算できません。")
