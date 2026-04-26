@@ -11,12 +11,16 @@ import hashlib
 
 # --- データベース初期設定 (Supabase対応) ---
 def init_connection():
-    # SecretsからURLを取得
-    db_url = st.secrets["db_url"]
-    # SQLAlchemyで接続エンジンを作成
-    return create_engine(db_url)
-
-engine = init_connection()
+    try:
+        db_url = st.secrets["db_url"]
+        # パスワードに特殊文字がある場合の対策として、明示的にドライバーを指定
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        
+        return create_engine(db_url, pool_pre_ping=True)
+    except Exception as e:
+        st.error(f"接続設定エラー: {e}")
+        st.stop()
 
 def init_db():
     """テーブルの初期化（PostgreSQL形式）"""
