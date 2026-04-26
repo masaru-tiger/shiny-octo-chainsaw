@@ -12,15 +12,16 @@ import hashlib
 # --- データベース初期設定 ---
 def init_connection():
     try:
-        db_url = st.secrets["db_url"]
-        # postgres:// を postgresql:// に補正（SQLAlchemyの仕様対策）
-        if db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        # Secrets から個別に取得
+        db_conf = st.secrets["database"]
         
-        # pool_pre_ping=True で接続切れを自動検知
+        # URLを安全に組み立てる
+        # f-string を使うことで、パスワード内の特殊文字をそのまま扱えます
+        db_url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}?pgbouncer=true"
+        
         return create_engine(db_url, pool_pre_ping=True)
     except Exception as e:
-        st.error(f"接続設定エラー: {e}")
+        st.error(f"データベース設定の読み込みに失敗しました: {e}")
         st.stop()
 
 # 1. まず engine を定義する（重要！）
