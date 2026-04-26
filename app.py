@@ -228,22 +228,25 @@ def show_login_screen():
         with st.form("login"):
             un, pw = st.text_input("ユーザー名"), st.text_input("パスワード", type="password")
             if st.form_submit_button("ログイン"):
-                # 管理者ログイン判定
-                if un == "edit" and pw == "edit":
+                # 【修正箇所】管理者ログイン判定を admin / admin に変更
+                if un == "admin" and pw == "admin":
                     st.session_state.logged_in = True
                     st.session_state.is_admin = True
-                    st.session_state.user_info = {'username': '管理者', 'group_id': 'ADMIN', 'role': 'admin'}
+                    st.session_state.user_info = {'username': 'システム管理者', 'group_id': 'ADMIN', 'role': 'admin'}
                     st.session_state.view_group_id = 'ADMIN'
                     st.rerun()
+                
                 # 通常ログイン
                 with engine.connect() as conn:
                     row = conn.execute(text("SELECT id, username, password, group_id, role FROM users WHERE username=:un"), {"un": un}).fetchone()
+                
                 if row and row[2] == hash_password(pw):
                     st.session_state.logged_in, st.session_state.is_admin = True, False
                     st.session_state.user_info = {'id': row[0], 'username': row[1], 'group_id': row[3], 'role': row[4]}
                     st.session_state.view_group_id = row[3]
                     st.rerun()
-                else: st.error("ログイン失敗")
+                else: 
+                    st.error("ログイン失敗：ユーザー名またはパスワードが正しくありません")
     with tab2:
         with st.form("signup"):
             new_un, new_pw = st.text_input("新ユーザー名"), st.text_input("パスワード", type="password")
