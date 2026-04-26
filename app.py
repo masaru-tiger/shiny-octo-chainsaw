@@ -144,12 +144,12 @@ def show_registration(user_info):
             match = next((r for r in existing_data if r[2] == scanned_jan), None)
             
             if match:
-                # ヒットした場合：分類と商品名を自動セット
+                # ヒットした場合：分類と商品名をセット
                 auto_cat = match[0]
                 auto_name = match[1]
-                st.info(f"💡 登録済み商品が見つかりました：【{auto_cat}】{auto_name}")
+                st.info(f"💡 登録済み：【{auto_cat}】{auto_name}")
             else:
-                # ヒットしなかった場合：Webから商品名を取得（新規登録用）
+                # 新規の場合：Web検索
                 with st.spinner('新規商品として検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
 
@@ -198,48 +198,50 @@ def show_registration(user_info):
         st.subheader("➕ 在庫の加算")
         col_a, col_b = st.columns(2)
         
-        # 1. 分類の自動選択・入力
+        # 1. 分類の自動選択 (indexをスキャン結果に合わせて調整)
+        target_cat_idx = cat_list.index(auto_cat) + 1 if auto_cat in cat_list else 0
         sel_cat_add = col_a.selectbox(
             "分類を選択", 
             ["（直接入力）"] + cat_list, 
-            index=cat_list.index(auto_cat)+1 if auto_cat in cat_list else 0,
+            index=target_cat_idx,
             key="cat_selector_add"
         )
-        # スキャンでヒットした分類がある場合は、直接入力欄にも反映
-        f_cat_manual = col_a.text_input("分類を直接入力", value=auto_cat if auto_cat and auto_cat not in cat_list else "")
-        current_cat = sel_cat_add if sel_cat_add != "（直接入力）" else f_cat_manual
+        
+        # スキャンでヒットした分類、またはプルダウン選択値を反映
+        # ここがポイント：スキャン時はauto_catを優先、プルダウン変更時は選択値を優先
+        f_cat_manual = col_a.text_input("分類の確認/直接入力", value=auto_cat if (auto_cat and sel_cat_add == "（直接入力）") else (sel_cat_add if sel_cat_add != "（直接入力）" else ""))
+        current_cat = f_cat_manual
 
-        # 2. 選択された分類に基づいて商品リストをフィルタ
+        # 2. 商品リストのフィルタリング
         filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
         
-        # 3. 商品名の自動選択・入力
+        # 3. 商品名の自動選択
+        target_name_idx = filtered_names.index(auto_name) + 1 if auto_name in filtered_names else 0
         sel_name_add = col_b.selectbox(
             f"「{current_cat}」の商品名を選択", 
             ["（直接入力）"] + filtered_names,
-            index=filtered_names.index(auto_name)+1 if auto_name in filtered_names else 0,
+            index=target_name_idx,
             key="name_selector_add"
         )
-        f_name_manual = col_b.text_input("商品名を直接入力", value=auto_name if auto_name and auto_name not in filtered_names else "")
+        f_name_manual = col_b.text_input("商品名の確認/直接入力", value=auto_name if (auto_name and sel_name_add == "（直接入力）") else (sel_name_add if sel_name_add != "（直接入力）" else ""))
+        current_name = f_name_manual
 
         with st.form("addition_form", clear_on_submit=True):
-            # スキャンしたJANはここにも表示
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
             f_add_qty = st.text_input("追加数", value="1.0")
             
             if st.form_submit_button("在庫を加算"):
                 t_jan = f_jan_add
                 t_cat = current_cat
-                t_name = sel_name_add if sel_name_add != "（直接入力）" else f_name_manual
+                t_name = current_name
                 add_val = float(f_add_qty)
                 
                 with engine.begin() as conn:
-                    # JANが一致するか、分類/名前が一致する場合に加算
                     res = conn.execute(text("""
                         UPDATE items SET quantity = quantity + :add, last_updated = :today 
                         WHERE group_id = :gid AND (
                            (jan_code = :jan AND jan_code <> '') 
-                           OR (category = :cat AND :cat <> '')
-                           OR (name = :name AND :name <> '')
+                           OR (category = :cat AND name = :name)
                         )
                     """), {"add": add_val, "today": datetime.now().date(), 
                            "jan": t_jan, "cat": t_cat, "name": t_name, "gid": view_id})
