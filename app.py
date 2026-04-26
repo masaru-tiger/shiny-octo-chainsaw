@@ -162,14 +162,40 @@ def show_registration(user_info):
         with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
             f_add_qty = st.text_input("追加数", value="1.0")
+
+            # --- show_registration 内の在庫加算処理の修正案 ---
             if st.form_submit_button("在庫を加算する"):
                 try:
+                    add_val = float(f_add_qty)
                     with engine.begin() as conn:
-                        res = conn.execute(text("UPDATE items SET quantity = quantity + :add, last_updated = :today WHERE group_id = :gid AND ((jan_code = :jan AND jan_code <> '') OR (category = :cat AND name = :name))"),
-                                           {"add": float(f_add_qty), "today": datetime.now().date(), "jan": f_jan_add, "cat": current_cat, "name": current_name, "gid": view_id})
-                    if res.rowcount > 0: st.success("加算完了！")
-                    else: st.error("商品が見つかりません")
-                except: st.error("数値エラー")
+                        # 1. まず対象の item_id を特定
+                        item = conn.execute(text("""
+                            SELECT id FROM items 
+                            WHERE group_id = :gid 
+                            AND ((jan_code = :jan AND jan_code <> '') OR (category = :cat AND name = :name))
+                        """), {"jan": f_jan_add, "cat": current_cat, "name": current_name, "gid": view_id}).fetchone()
+
+                        if item:
+                            target_item_id = item[0]
+                
+                            # 2. 在庫数を更新（上書き）
+                            conn.execute(text("""
+                                UPDATE items 
+                                SET quantity = quantity + :add, last_updated = :today 
+                                WHERE id = :id
+                            """), {"add": add_val, "today": datetime.now().date(), "id": target_item_id})
+                
+                            # 3. 履歴テーブルにレコードを挿入
+                            conn.execute(text("""
+                                INSERT INTO inventory_history (item_id, change_qty, action_type, group_id) 
+                                VALUES (:item_id, :add, 'purchase', :gid)
+                            """), {"item_id": target_item_id, "add": add_val, "gid": view_id})
+                
+                            st.success("在庫加算と履歴の保存が完了しました！")
+                        else:
+                            st.error("一致する商品がありません。")
+                except Exception as e:
+                    st.error(f"エラーが発生しました: {e}")
 
 # --- 画面描画（編集・削除） ---
 def show_edit_delete(user_info):
@@ -195,41 +221,56 @@ def show_edit_delete(user_info):
 def show_admin_tool():
     st.header("🛠 データベース管理者ツール (Admin Mode)")
     
-    # --- CSVダウンロードセクション ---
+    # --- 1. CSVダウンロードセクション ---
     st.subheader("📥 データのバックアップ (CSV出力)")
-    col_csv1, col_csv2 = st.columns(2)
+    col_csv1, col_csv2, col_csv3 = st.columns(3) # 履歴用に3列に変更
     
     with engine.connect() as conn:
-        # 在庫データの取得
         df_items = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
-        # ユーザーデータの取得
         df_users = pd.read_sql("SELECT id, username, group_id, role FROM users ORDER BY id ASC", conn)
+        # 履歴データも取得
+        df_history = pd.read_sql("""
+            SELECT h.created_at, i.category, i.name, h.change_qty, i.capacity, h.group_id
+            FROM inventory_history h
+            LEFT JOIN items i ON h.item_id = i.id
+            ORDER BY h.created_at DESC
+        """, conn)
 
     with col_csv1:
-        st.write("📦 在庫管理データ")
-        csv_items = df_items.to_csv(index=False).encode('utf-8-sig') # Excelで開けるようsig付き
-        st.download_button(
-            label="在庫データをダウンロード",
-            data=csv_items,
-            file_name=f"inventory_backup_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
+        st.write("📦 在庫マスタ")
+        csv_items = df_items.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(label="在庫CSV", data=csv_items, 
+                           file_name=f"inventory_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
 
     with col_csv2:
-        st.write("👤 ユーザー管理データ")
+        st.write("👤 ユーザー")
         csv_users = df_users.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="ユーザーデータをダウンロード",
-            data=csv_users,
-            file_name=f"users_backup_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
+        st.download_button(label="ユーザーCSV", data=csv_users, 
+                           file_name=f"users_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+
+    with col_csv3:
+        st.write("📜 入庫履歴")
+        csv_history = df_history.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(label="履歴CSV", data=csv_history, 
+                           file_name=f"history_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
 
     st.divider()
 
-    # --- データ編集セクション（既存機能） ---
+    # --- 2. 直近の履歴表示 ---
+    st.subheader("📜 最近の在庫更新履歴")
+    if not df_history.empty:
+        # 表示用に時間を整形
+        display_history = df_history.copy()
+        display_history['created_at'] = pd.to_datetime(display_history['created_at']).dt.strftime('%m/%d %H:%M')
+        st.dataframe(display_history.head(20), use_container_width=True) # 直近20件を表示
+    else:
+        st.info("履歴データはまだありません。")
+
+    st.divider()
+
+    # --- 3. データ編集セクション（既存機能） ---
     try:
-        st.subheader("📊 在庫データ一覧（全グループ対象）")
+        st.subheader("📊 在庫データ修正（全グループ対象）")
         st.dataframe(df_items, use_container_width=True)
         
         st.divider()
