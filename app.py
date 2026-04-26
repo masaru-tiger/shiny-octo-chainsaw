@@ -13,13 +13,21 @@ import hashlib
 def init_connection():
     try:
         db_conf = st.secrets["database"]
-        # シンプルかつ確実なURL組み立て
-        db_url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}?pgbouncer=true"
         
-        # 接続のタイムアウトを短くして、エラーを早く検知するようにします
-        return create_engine(db_url, connect_args={'connect_timeout': 10}, pool_pre_ping=True)
+        # ?pgbouncer=true を削除し、ポートを 6543 に固定します
+        db_url = (
+            f"postgresql://{db_conf['user']}:{db_conf['password']}@"
+            f"{db_conf['host']}:6543/{db_conf['database']}"
+        )
+        
+        # SQLAlchemy 2.0以上での接続維持設定を追加
+        return create_engine(
+            db_url, 
+            connect_args={'sslmode': 'require'}, # セキュリティ向上のため追加
+            pool_pre_ping=True
+        )
     except Exception as e:
-        st.error(f"Secretsの読み込み、または設定に問題があります: {e}")
+        st.error(f"接続設定エラー: {e}")
         st.stop()
 
 engine = init_connection()
