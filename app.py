@@ -9,23 +9,28 @@ from bs4 import BeautifulSoup
 import uuid
 import hashlib
 
-# --- データベース初期設定 (Supabase対応) ---
+# --- データベース初期設定 ---
 def init_connection():
     try:
         db_url = st.secrets["db_url"]
-        # パスワードに特殊文字がある場合の対策として、明示的にドライバーを指定
+        # postgres:// を postgresql:// に補正（SQLAlchemyの仕様対策）
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
         
+        # pool_pre_ping=True で接続切れを自動検知
         return create_engine(db_url, pool_pre_ping=True)
     except Exception as e:
         st.error(f"接続設定エラー: {e}")
         st.stop()
 
+# 1. まず engine を定義する（重要！）
+engine = init_connection()
+
+# 2. その後に engine を使う関数を定義する
 def init_db():
     """テーブルの初期化（PostgreSQL形式）"""
     with engine.begin() as conn:
-        # ユーザーテーブル (idはSERIALを使用)
+        # ユーザーテーブル
         conn.execute(text('''CREATE TABLE IF NOT EXISTS users 
                            (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT, group_id TEXT, role TEXT)'''))
         # 在庫テーブル
@@ -33,6 +38,7 @@ def init_db():
                            (id SERIAL PRIMARY KEY, group_id TEXT, name TEXT, capacity TEXT, 
                             quantity REAL, daily_rate REAL, threshold REAL, last_updated DATE)'''))
 
+# 3. 最後に実行する
 init_db()
 
 # --- セキュリティ: パスワードのハッシュ化 ---
