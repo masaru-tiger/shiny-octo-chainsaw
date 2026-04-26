@@ -109,20 +109,31 @@ def show_registration(user_info):
     reg_mode = st.radio("登録モード", ["日常の購入（在庫加算）", "新規分類・商品の登録"], horizontal=True)
     img_file = st.camera_input("バーコードスキャン")
     
-    scanned_jan, auto_name = "", ""
+    scanned_jan, auto_name, auto_cat = "", "", ""
+    
+    # 既存の分類・商品リストをDBから取得
+    with engine.connect() as conn:
+        existing_data = conn.execute(
+            text("SELECT DISTINCT category, name, jan_code FROM items WHERE group_id=:gid"), 
+            {"gid": view_id}
+        ).fetchall()
+    
+    cat_list = sorted(list(set([r[0] for r in existing_data if r[0]])))
+    name_list = sorted(list(set([r[1] for r in existing_data if r[1]])))
+
+    # スキャン処理
     if img_file:
         img = Image.open(img_file)
         decoded_objs = decode(img)
         if decoded_objs:
             scanned_jan = decoded_objs[0].data.decode('utf-8')
             st.success(f"JAN検知: {scanned_jan}")
-            with engine.connect() as conn:
-                # JANコードまたは名前で既存商品を検索
-                item = conn.execute(text("SELECT category, name FROM items WHERE (jan_code = :jan OR name LIKE :name) AND group_id=:gid"), 
-                                    {"jan": scanned_jan, "name": f"%{scanned_jan}%", "gid": view_id}).fetchone()
-            if item:
-                st.info(f"登録済み：【{item[0]}】{item[1]}")
-                auto_name = item[1]
+            # JANで既存商品を検索
+            match = next((r for r in existing_data if r[2] == scanned_jan), None)
+            if match:
+                auto_cat = match[0]
+                auto_name = match[1]
+                st.info(f"登録済み一致：【{auto_cat}】{auto_name}")
             else:
                 with st.spinner('商品名検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
@@ -131,16 +142,24 @@ def show_registration(user_info):
 
     with st.form("inventory_form", clear_on_submit=True):
         if reg_mode == "新規分類・商品の登録":
-            f_cat = st.text_input("分類 (例: 牛乳, ティッシュ)", placeholder="同じ分類なら在庫が合算されます")
-            f_jan = st.text_input("JANコード (空欄OK)", value=scanned_jan) # ★追加
+            st.subheader("🆕 新規マスタ登録")
+            # 分類：プルダウン + 直接入力
+            sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
+            new_cat = st.text_input("分類を直接入力（新規の場合）")
+            f_cat = new_cat if sel_cat == "（直接入力する）" else sel_cat
+            
+            f_jan = st.text_input("JANコード (空欄OK)", value=scanned_jan)
             f_name = st.text_input("具体的な商品名", value=auto_name)
             f_cap = st.text_input("単位 (例: 本, パック)", value="個")
-            col1, col2, col3 = st.columns(3)
-            f_qty = col1.number_input("現在数", min_value=0.0, value=1.0)
-            f_rate = col2.number_input("1日の消費", min_value=0.0, value=0.1)
-            f_alert = col3.number_input("警告しきい値", min_value=0.0, value=1.0)
             
-            if st.form_submit_button("新規マスタ登録"):
+            # 数値入力（step=None でプラスマイナスボタンを非表示にする ※Streamlitの仕様上、完全に消すにはnumber_inputではなくtext_inputで代用するのが確実です）
+            # ここでは数値のみ受け付ける text_input 形式でUIをスッキリさせます
+            c1, c2, c3 = st.columns(3)
+            f_qty = c1.text_input("現在数", value="1.0")
+            f_rate = c2.text_input("1日の消費", value="0.1")
+            f_alert = c3.text_input("警告しきい値", value="1.0")
+            
+            if st.form_submit_button("新規マスタとして登録"):
                 if not f_cat or not f_name:
                     st.error("分類と商品名は必須です")
                 else:
@@ -148,34 +167,46 @@ def show_registration(user_info):
                         conn.execute(text("""
                             INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) 
                             VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)
-                        """), {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, "qty": f_qty, "rate": f_rate, "alert": f_alert, "today": datetime.now().date()})
-                    st.success(f"「{f_cat}」を新規登録しました！")
-        
+                        """), {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, 
+                               "qty": float(f_qty), "rate": float(f_rate), "alert": float(f_alert), "today": datetime.now().date()})
+                    st.success(f"「{f_cat}」を登録しました")
+
         else:
-            # 日常の購入（在庫加算）モード
-            with engine.connect() as conn:
-                cats = conn.execute(text("SELECT DISTINCT category FROM items WHERE group_id=:gid"), {"gid": view_id}).fetchall()
-            cat_list = [c[0] for c in cats]
+            st.subheader("➕ 在庫の加算")
+            # 分類・商品名の選択（プルダウン or 直接入力）
+            col_a, col_b = st.columns(2)
+            sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, 
+                                          index=cat_list.index(auto_cat)+1 if auto_cat in cat_list else 0)
+            f_cat_manual = col_a.text_input("分類を直接入力", value=auto_cat if not auto_cat in cat_list else "")
             
-            f_search_cat = st.selectbox("加算する分類を選択", ["直接入力/スキャンで検索"] + cat_list)
-            f_jan_add = st.text_input("JANコード (スキャン時は自動入力、空欄OK)", value=scanned_jan) # ★追加
-            f_manual = st.text_input("またはキーワード（分類名・商品名）", value=auto_name if auto_name else "")
-            f_add_qty = st.number_input("追加数", min_value=1.0, value=1.0, step=1.0)
+            sel_name_add = col_b.selectbox("商品名を選択", ["（直接入力）"] + name_list,
+                                           index=name_list.index(auto_name)+1 if auto_name in name_list else 0)
+            f_name_manual = col_b.text_input("商品名を直接入力/スキャン結果", value=auto_name if not auto_name in name_list else "")
+            
+            f_jan_add = st.text_input("JANコード (スキャン時は自動入力)", value=scanned_jan)
+            
+            f_add_qty = st.text_input("追加数", value="1.0")
             
             if st.form_submit_button("在庫を加算"):
-                # 検索の優先順位：1.入力されたJANコード 2.選択された分類 3.入力されたキーワード
-                target = f_jan_add if f_jan_add else (f_search_cat if f_search_cat != "直接入力/スキャンで検索" else f_manual)
+                # 検索優先度: JAN > 分類 > 商品名
+                t_jan = f_jan_add
+                t_cat = sel_cat_add if sel_cat_add != "（直接入力）" else f_cat_manual
+                t_name = sel_name_add if sel_name_add != "（直接入力）" else f_name_manual
                 
                 with engine.begin() as conn:
                     res = conn.execute(text("""
                         UPDATE items SET quantity = quantity + :add, last_updated = :today 
-                        WHERE (jan_code = :target OR category = :target OR name LIKE :t_like) AND group_id = :gid
-                    """), {"add": f_add_qty, "today": datetime.now().date(), "target": target, "t_like": f"%{target}%", "gid": view_id})
+                        WHERE (jan_code = :jan AND jan_code <> '') 
+                           OR (category = :cat AND :cat <> '')
+                           OR (name = :name AND :name <> '')
+                        AND group_id = :gid
+                    """), {"add": float(f_add_qty), "today": datetime.now().date(), 
+                           "jan": t_jan, "cat": t_cat, "name": t_name, "gid": view_id})
                 
                 if res.rowcount > 0:
-                    st.success(f"在庫を増やしました！")
+                    st.success("在庫を加算しました！")
                 else:
-                    st.error("該当する商品が見つかりません。新規登録してください。")
+                    st.error("一致する商品が見つかりません。新規登録してください。")
 
 def show_edit_delete(user_info):
     view_id = st.session_state.view_group_id
