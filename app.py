@@ -264,7 +264,7 @@ def show_admin_tool():
 
 # --- ログイン・メイン制御 ---
 def show_login_screen():
-    st.title("📦 Smart Stock System v2")
+    st.title("🐨 ストックコアラ v2")
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
     with tab1:
         with st.form("login"):
