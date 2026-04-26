@@ -133,6 +133,7 @@ def show_registration(user_info):
     with st.form("inventory_form", clear_on_submit=True):
         if reg_mode == "新規分類・商品の登録":
             f_cat = st.text_input("分類 (例: 牛乳, ティッシュ)", placeholder="同じ分類なら在庫が合算されます")
+            f_jan = st.text_input("JANコード", value=scanned_jan)
             f_name = st.text_input("具体的な商品名", value=auto_name)
             f_cap = st.text_input("単位 (例: 本, パック, kg)", value="個")
             col1, col2, col3 = st.columns(3)
@@ -146,9 +147,9 @@ def show_registration(user_info):
                 else:
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            INSERT INTO items (group_id, category, name, capacity, quantity, daily_rate, threshold, last_updated) 
+                            INSERT INTO items (group_id, category, name, jan_code,capacity, quantity, daily_rate, threshold, last_updated) 
                             VALUES (:gid, :cat, :name, :cap, :qty, :rate, :alert, :today)
-                        """), {"gid": view_id, "cat": f_cat, "name": f"{f_name} ({scanned_jan})", "cap": f_cap, "qty": f_qty, "rate": f_rate, "alert": f_alert, "today": datetime.now().date()})
+                        """), {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, "qty": f_qty, "rate": f_rate, "alert": f_alert, "today": datetime.now().date()})
                     st.success(f"「{f_cat}」を新規登録しました！")
         
         else:
