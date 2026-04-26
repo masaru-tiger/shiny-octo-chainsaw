@@ -284,10 +284,22 @@ def show_admin_tool():
     # --- 2. 直近の履歴表示 ---
     st.subheader("📜 最近の在庫更新履歴")
     if not df_history.empty:
-        # 表示用に時間を整形
+        # 表示用にコピーを作成
         display_history = df_history.copy()
-        display_history['created_at'] = pd.to_datetime(display_history['created_at']).dt.strftime('%m/%d %H:%M')
-        st.dataframe(display_history.head(20), use_container_width=True) # 直近20件を表示
+        
+        # 【修正箇所】SQLで名前を変えたため、"更新日時" カラムを参照する
+        # すでに上のCSVセクションで変換済みの場合は、この処理はスキップまたは以下のように書きます
+        try:
+            # すでにフォーマット済みならそのまま、未フォーマットなら変換
+            if "更新日時" in display_history.columns:
+                st.dataframe(display_history.head(20), use_container_width=True)
+            else:
+                # 万が一 'created_at' のままだった場合の保険
+                display_history['created_at'] = pd.to_datetime(display_history['created_at']).dt.strftime('%m/%d %H:%M')
+                st.dataframe(display_history.head(20), use_container_width=True)
+        except Exception:
+            # 最悪、エラーを出さずにデータをそのまま表示する（フェールセーフ）
+            st.dataframe(display_history.head(20), use_container_width=True)
     else:
         st.info("履歴データはまだありません。")
 
