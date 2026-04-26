@@ -168,20 +168,19 @@ def show_registration(user_info):
                     with engine.begin() as conn:
                         # 1. まず対象の item_id を特定
                         item = conn.execute(text("""
-                            SELECT id FROM items 
+                            SELECT id, quantity, daily_rate FROM items 
                             WHERE group_id = :gid 
                             AND ((jan_code = :jan AND jan_code <> '') OR (category = :cat AND name = :name))
                         """), {"jan": f_jan_add, "cat": current_cat, "name": current_name, "gid": view_id}).fetchone()
 
                         if item:
-                            target_item_id = item[0]
+                            target_item_id, current_qty, daily_rate = item
+                            new_qty = current_qty + add_val
                 
                             # 2. 在庫数を更新（上書き）
                             conn.execute(text("""
-                                UPDATE items 
-                                SET quantity = quantity + :add, last_updated = :today 
-                                WHERE id = :id
-                            """), {"add": add_val, "today": datetime.now().date(), "id": target_item_id})
+                                UPDATE items SET quantity = :q, last_updated = :today WHERE id = :id
+                            """), {"q": new_qty, "today": datetime.now().date(), "id": target_item_id})
                 
                             # 3. 履歴テーブルにレコードを挿入
                             conn.execute(text("""
@@ -189,7 +188,14 @@ def show_registration(user_info):
                                 VALUES (:item_id, :add, 'purchase', :gid)
                             """), {"item_id": target_item_id, "add": add_val, "gid": view_id})
                 
-                            st.success("在庫加算と履歴の保存が完了しました！")
+                            # 4.次回購入日をとりあえず通知
+                            st.success(f"在庫を加算しました！（現在庫: {new_qty}）")
+                            if daily_rate > 0:
+                                days_left = int(new_qty / daily_rate)
+                                next_date = datetime.now() + timedelta(days=days_left)
+                                st.info(f"💡 次回の購入予定日は **{next_date.strftime('%Y/%m/%d')}** です（残り約{days_left}日分）")
+                            else:
+                                st.warning("⚠️ 1日の消費量が0に設定されているため、予測日を計算できません。")
                         else:
                             st.error("一致する商品がありません。")
                 except Exception as e:
@@ -230,7 +236,7 @@ def show_admin_tool():
         # 履歴データの取得 (LEFT JOINで名前を紐付け。名前が取れなくても全行出す)
         df_history = pd.read_sql("""
             SELECT 
-                h.created_at as "更新日時",
+                h.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tokyo' as "更新日時",
                 i.category as "分類",
                 i.name as "商品名",
                 h.change_qty as "加算数",
