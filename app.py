@@ -162,8 +162,6 @@ def show_registration(user_info):
         with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
             f_add_qty = st.text_input("追加数", value="1.0")
-
-            # --- show_registration 内の在庫加算処理の修正案 ---
             if st.form_submit_button("在庫を加算する"):
                 try:
                     add_val = float(f_add_qty)
@@ -219,40 +217,67 @@ def show_edit_delete(user_info):
 
 # --- 管理者専用：DBメンテナンス画面 ---
 def show_admin_tool():
-    st.header("🛠 データベース管理者ツール (Admin Mode)")
-    
-    # --- 1. CSVダウンロードセクション ---
+    # --- 1. CSVダウンロードセクション (堅牢版) ---
     st.subheader("📥 データのバックアップ (CSV出力)")
-    col_csv1, col_csv2, col_csv3 = st.columns(3) # 履歴用に3列に変更
+    col_csv1, col_csv2, col_csv3 = st.columns(3)
     
     with engine.connect() as conn:
+        # 在庫マスタ
         df_items = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
+        # ユーザーデータ
         df_users = pd.read_sql("SELECT id, username, group_id, role FROM users ORDER BY id ASC", conn)
-        # 履歴データも取得
+        
+        # 履歴データの取得 (LEFT JOINで名前を紐付け。名前が取れなくても全行出す)
         df_history = pd.read_sql("""
-            SELECT h.created_at, i.category, i.name, h.change_qty, i.capacity, h.group_id
+            SELECT 
+                h.created_at as "更新日時",
+                i.category as "分類",
+                i.name as "商品名",
+                h.change_qty as "加算数",
+                i.capacity as "容量",
+                h.group_id as "実行グループ",
+                h.item_id as "アイテムID"
             FROM inventory_history h
             LEFT JOIN items i ON h.item_id = i.id
             ORDER BY h.created_at DESC
         """, conn)
 
+    # 日本時間への変換（created_atが文字列やUTCの場合の対策）
+    if not df_history.empty:
+        df_history["更新日時"] = pd.to_datetime(df_history["更新日時"]).dt.strftime('%Y-%m-%d %H:%M:%S')
+
     with col_csv1:
         st.write("📦 在庫マスタ")
-        csv_items = df_items.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(label="在庫CSV", data=csv_items, 
-                           file_name=f"inventory_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        if not df_items.empty:
+            csv_items = df_items.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(label="在庫CSVを保存", data=csv_items, 
+                               file_name=f"inventory_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        else:
+            st.warning("在庫データがありません")
 
     with col_csv2:
         st.write("👤 ユーザー")
-        csv_users = df_users.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(label="ユーザーCSV", data=csv_users, 
-                           file_name=f"users_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        if not df_users.empty:
+            csv_users = df_users.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(label="ユーザーCSVを保存", data=csv_users, 
+                               file_name=f"users_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        else:
+            st.warning("ユーザーデータがありません")
 
     with col_csv3:
         st.write("📜 入庫履歴")
-        csv_history = df_history.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(label="履歴CSV", data=csv_history, 
-                           file_name=f"history_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        if not df_history.empty:
+            csv_history = df_history.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(label="履歴CSVを保存", data=csv_history, 
+                               file_name=f"history_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        else:
+            # データが0件の場合のデバッグ表示
+            st.error("履歴が0件です。更新を試してください。")
+            # 念のため生テーブルに直接問い合わせてみるボタン（デバッグ用）
+            if st.button("生データの存在を確認"):
+                with engine.connect() as conn:
+                    raw_check = pd.read_sql("SELECT count(*) FROM inventory_history", conn)
+                    st.write(f"DB内の生データ件数: {raw_check.iloc[0,0]}件")
 
     st.divider()
 
