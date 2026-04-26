@@ -2,10 +2,31 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# --- データベース設定 ---
-# 既存のDB接続情報をここに反映してください
-DATABASE_URL = "sqlite:///smart_stock.db"  # 例: SQLiteの場合
-engine = create_engine(DATABASE_URL)
+# --- データベース接続設定 (app.pyと同じロジック) ---
+def init_connection():
+    try:
+        db_conf = st.secrets["database"]
+        # パスワードを安全にエンコード（特殊文字対策）
+        safe_password = urllib.parse.quote_plus(db_conf['password'])
+        
+        # ポート6543を指定し、接続先URLを構築
+        db_url = (
+            f"postgresql://{db_conf['user']}:{safe_password}@"
+            f"{db_conf['host']}:6543/{db_conf['database']}"
+        )
+        
+        # SSL接続を必須にして安定化
+        return create_engine(
+            db_url, 
+            connect_args={'sslmode': 'require'}, 
+            pool_pre_ping=True
+        )
+    except Exception as e:
+        st.error(f"接続設定エラー: {e}")
+        st.stop()
+
+# エンジンの初期化
+engine = init_connection()
 
 def run_admin_tool():
     st.set_page_config(page_title="Smart Stock Admin", layout="wide")
