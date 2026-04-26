@@ -119,7 +119,7 @@ def show_registration(user_info):
     st.header("🛒 在庫登録・スキャン")
     
     reg_mode = st.radio("登録モード", ["日常の購入（在庫加算）", "新規分類・商品の登録"], horizontal=True)
-    img_file = st.camera_input("バーコードスコードスキャン")
+    img_file = st.camera_input("バーコードスキャン")
     
     # 自動入力用の変数初期化
     scanned_jan, auto_name, auto_cat = "", "", ""
@@ -139,7 +139,6 @@ def show_registration(user_info):
         decoded_objs = decode(img)
         if decoded_objs:
             scanned_jan = decoded_objs[0].data.decode('utf-8')
-            st.success(f"JAN検知: {scanned_jan}")
             
             # DB内をJANコードで検索
             match = next((r for r in existing_data if r[2] == scanned_jan), None)
@@ -147,13 +146,20 @@ def show_registration(user_info):
             if match:
                 auto_cat = match[0]
                 auto_name = match[1]
-                st.info(f"💡 登録済み：【{auto_cat}】{auto_name}")
+                st.success(f"✅ 登録済み：【{auto_cat}】{auto_name}")
             else:
                 with st.spinner('新規商品として検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
+            
+            # 【重要】スキャン直後にセッション状態を直接更新してプルダウンを強制制御する
+            if auto_cat in cat_list:
+                st.session_state["cat_sel_add"] = auto_cat
+            else:
+                st.session_state["cat_sel_add"] = "（直接入力）"
 
     st.divider()
 
+    # --- ヘルパー関数 ---
     def announce_next_date(qty, rate, threshold, label):
         if rate > 0:
             days_left = (qty - threshold) / rate
@@ -168,12 +174,10 @@ def show_registration(user_info):
     if reg_mode == "新規分類・商品の登録":
         with st.form("registration_form", clear_on_submit=True):
             st.subheader("🆕 新規マスタ登録")
-            
-            # 分類選択
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
-            # 自動入力がある場合はその値を、ない場合は空文字をセット
-            f_cat_manual = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else ""
-            f_cat = f_cat_manual if sel_cat == "（直接入力する）" else sel_cat
+            # フォーム内では st.session_state 経由の自動入力が難しいため、valueで直接指定
+            f_cat_in = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else ""
+            f_cat = f_cat_in if sel_cat == "（直接入力する）" else sel_cat
             
             f_jan = st.text_input("JANコード", value=scanned_jan)
             f_name = st.text_input("具体的な商品名", value=auto_name)
@@ -185,31 +189,23 @@ def show_registration(user_info):
             f_alert = c3.text_input("警告しきい値", value="1.0")
             
             if st.form_submit_button("新規マスタとして登録"):
-                if not f_cat or not f_name:
-                    st.error("分類と商品名は必須です")
+                if not f_cat or not f_name: st.error("必須項目を入力してください")
                 else:
                     try:
-                        qty_f, rate_f, alert_f = float(f_qty), float(f_rate), float(f_alert)
                         with engine.begin() as conn:
-                            conn.execute(text("""
-                                INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) 
-                                VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)
-                            """), {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, 
-                                   "qty": qty_f, "rate": rate_f, "alert": alert_f, "today": datetime.now().date()})
-                        announce_next_date(qty_f, rate_f, alert_f, f_cat)
-                    except ValueError:
-                        st.error("数値項目には半角数字を入力してください")
+                            conn.execute(text("INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)"),
+                                         {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, "qty": float(f_qty), "rate": float(f_rate), "alert": float(f_alert), "today": datetime.now().date()})
+                        announce_next_date(float(f_qty), float(f_rate), float(f_alert), f_cat)
+                    except: st.error("登録に失敗しました")
 
     # --- モード2：日常の購入（在庫加算） ---
     else:
         st.subheader("➕ 在庫の加算")
         col_a, col_b = st.columns(2)
         
-        # 1. 分類選択：スキャンヒット時はその分類を自動選択
-        target_cat_idx = cat_list.index(auto_cat) + 1 if auto_cat in cat_list else 0
-        sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, index=target_cat_idx, key="cat_sel_add")
+        # 1. 分類選択 (indexではなく st.session_state の key で制御)
+        sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, key="cat_sel_add")
         
-        # 直接入力が選ばれている、あるいはスキャンで新しい分類が来た場合のみ入力欄を表示
         if sel_cat_add == "（直接入力）":
             current_cat = col_a.text_input("分類を手入力", value=auto_cat, key="cat_manual_in")
         else:
@@ -217,6 +213,8 @@ def show_registration(user_info):
 
         # 2. 商品名選択
         filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
+        
+        # スキャン時に商品名がリストにあるか確認して初期選択位置を決定
         target_name_idx = filtered_names.index(auto_name) + 1 if auto_name in filtered_names else 0
         sel_name_add = col_b.selectbox(f"「{current_cat}」内の商品を選択", ["（直接入力）"] + filtered_names, index=target_name_idx, key="name_sel_add")
         
@@ -233,29 +231,17 @@ def show_registration(user_info):
                 try:
                     add_val = float(f_add_qty)
                     with engine.begin() as conn:
-                        # 確実にヒットするよう条件を調整
                         res = conn.execute(text("""
-                            UPDATE items 
-                            SET quantity = quantity + :add, last_updated = :today 
-                            WHERE group_id = :gid 
-                            AND (
-                                (jan_code = :jan AND jan_code <> '') 
-                                OR (category = :cat AND :cat <> '')
-                            )
+                            UPDATE items SET quantity = quantity + :add, last_updated = :today 
+                            WHERE group_id = :gid AND ((jan_code = :jan AND jan_code <> '') OR (category = :cat))
                         """), {"add": add_val, "today": datetime.now().date(), "jan": f_jan_add, "cat": current_cat, "gid": view_id})
                     
                     if res.rowcount > 0:
                         with engine.connect() as conn:
-                            new_data = conn.execute(text("""
-                                SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) 
-                                FROM items WHERE category = :cat AND group_id = :gid
-                            """), {"cat": current_cat, "gid": view_id}).fetchone()
-                            if new_data:
-                                announce_next_date(new_data[0], new_data[1], new_data[2], current_cat)
-                    else:
-                        st.error(f"「{current_cat}」に一致するデータがありません。")
-                except ValueError:
-                    st.error("追加数には数字を入力してください。")
+                            new_data = conn.execute(text("SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) FROM items WHERE category = :cat AND group_id = :gid"), {"cat": current_cat, "gid": view_id}).fetchone()
+                            if new_data: announce_next_date(new_data[0], new_data[1], new_data[2], current_cat)
+                    else: st.error("更新対象が見つかりません。")
+                except ValueError: st.error("数値を入力してください。")
 
 def show_edit_delete(user_info):
     view_id = st.session_state.view_group_id
