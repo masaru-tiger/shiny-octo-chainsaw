@@ -73,34 +73,46 @@ def show_dashboard(user_info):
     st.header(f"📊 在庫ダッシュボード ({view_id})")
     
     with engine.connect() as conn:
-        df = pd.read_sql(text("SELECT * FROM items WHERE group_id=:gid"), conn, params={"gid": view_id})
+        # category ごとに quantity を合計（SUM）し、一番新しい情報を取得する
+        query = text("""
+            SELECT 
+                category, 
+                SUM(quantity) as total_qty, 
+                MAX(capacity) as unit, 
+                SUM(daily_rate) as total_rate, 
+                MAX(threshold) as max_threshold,
+                MAX(name) as latest_name
+            FROM items 
+            WHERE group_id=:gid 
+            GROUP BY category
+        """)
+        df = pd.read_sql(query, conn, params={"gid": view_id})
     
     if df.empty:
-        st.info("登録されている在庫はありません。登録・スキャンから始めてください。")
+        st.info("登録されている在庫はありません。")
         return
 
-    # ステータス判定
+    # ステータス判定（合計値で判定）
     def get_status(row):
-        days_left = row['quantity'] / row['daily_rate'] if row['daily_rate'] > 0 else 999
-        if row['quantity'] <= row['threshold']: return "🔴 もうすぐ切れる"
+        days_left = row['total_qty'] / row['total_rate'] if row['total_rate'] > 0 else 999
+        if row['total_qty'] <= row['max_threshold']: return "🔴 もうすぐ切れる"
         elif days_left <= 3: return "🟡 そろそろ切れる"
         else: return "🔵 まだ余裕ある"
     
     df['status'] = df.apply(get_status, axis=1)
     
-    # 表示項目を「分類」優先に
+    # 表示
     cols = st.columns(3)
     states = ["🔴 もうすぐ切れる", "🟡 そろそろ切れる", "🔵 まだ余裕ある"]
     for i, state in enumerate(states):
         with cols[i]:
             st.subheader(state)
             sub_df = df[df['status'] == state]
-            if not sub_df.empty:
-                # 分類を表示し、詳細として銘柄名を出す
-                for _, row in sub_df.iterrows():
-                    st.write(f"**{row['category']}** ({row['quantity']}{row['capacity']})")
-                    st.caption(f"最終登録銘柄: {row['name']}")
-                    st.divider()
+            for _, row in sub_df.iterrows():
+                # 分類名を大きく表示し、合計数量を出す
+                st.write(f"**{row['category']}** ({round(row['total_qty'], 1)}{row['unit']})")
+                st.caption(f"（最新登録：{row['latest_name']}）")
+                st.divider()
 
 def show_registration(user_info):
     view_id = st.session_state.view_group_id
