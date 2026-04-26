@@ -12,32 +12,27 @@ import hashlib
 # --- データベース初期設定 ---
 def init_connection():
     try:
-        # Secrets から個別に取得
         db_conf = st.secrets["database"]
-        
-        # URLを安全に組み立てる
-        # f-string を使うことで、パスワード内の特殊文字をそのまま扱えます
+        # シンプルかつ確実なURL組み立て
         db_url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}?pgbouncer=true"
         
-        return create_engine(db_url, pool_pre_ping=True)
+        # 接続のタイムアウトを短くして、エラーを早く検知するようにします
+        return create_engine(db_url, connect_args={'connect_timeout': 10}, pool_pre_ping=True)
     except Exception as e:
-        st.error(f"データベース設定の読み込みに失敗しました: {e}")
+        st.error(f"Secretsの読み込み、または設定に問題があります: {e}")
         st.stop()
 
-# 1. まず engine を定義する（重要！）
 engine = init_connection()
 
-# 2. その後に engine を使う関数を定義する
 def init_db():
-    """テーブルの初期化（PostgreSQL形式）"""
-    with engine.begin() as conn:
-        # ユーザーテーブル
-        conn.execute(text('''CREATE TABLE IF NOT EXISTS users 
-                           (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT, group_id TEXT, role TEXT)'''))
-        # 在庫テーブル
-        conn.execute(text('''CREATE TABLE IF NOT EXISTS items 
-                           (id SERIAL PRIMARY KEY, group_id TEXT, name TEXT, capacity TEXT, 
-                            quantity REAL, daily_rate REAL, threshold REAL, last_updated DATE)'''))
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("SELECT 1")) # 接続テスト
+            # ...（ここに以前のCREATE TABLE文を続けます）
+    except Exception as e:
+        st.error("データベース接続に失敗しました。パスワードやプロジェクトIDが正しいか確認してください。")
+        st.write(f"詳細エラー: {e}")
+        st.stop()
 
 # 3. 最後に実行する
 init_db()
