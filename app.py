@@ -117,25 +117,24 @@ def show_registration(user_info):
             scanned_jan = decoded_objs[0].data.decode('utf-8')
             st.success(f"JAN検知: {scanned_jan}")
             with engine.connect() as conn:
-                item = conn.execute(text("SELECT category, name FROM items WHERE name LIKE :name AND group_id=:gid"), 
-                                    {"name": f"%{scanned_jan}%", "gid": view_id}).fetchone()
+                # JANコードまたは名前で既存商品を検索
+                item = conn.execute(text("SELECT category, name FROM items WHERE (jan_code = :jan OR name LIKE :name) AND group_id=:gid"), 
+                                    {"jan": scanned_jan, "name": f"%{scanned_jan}%", "gid": view_id}).fetchone()
             if item:
                 st.info(f"登録済み：【{item[0]}】{item[1]}")
                 auto_name = item[1]
-                auto_cat = item[0]
             else:
                 with st.spinner('商品名検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
-                    auto_cat = ""
 
     st.divider()
 
     with st.form("inventory_form", clear_on_submit=True):
         if reg_mode == "新規分類・商品の登録":
             f_cat = st.text_input("分類 (例: 牛乳, ティッシュ)", placeholder="同じ分類なら在庫が合算されます")
-            f_jan = st.text_input("JANコード", value=scanned_jan)
+            f_jan = st.text_input("JANコード (空欄OK)", value=scanned_jan) # ★追加
             f_name = st.text_input("具体的な商品名", value=auto_name)
-            f_cap = st.text_input("単位 (例: 本, パック, kg)", value="個")
+            f_cap = st.text_input("単位 (例: 本, パック)", value="個")
             col1, col2, col3 = st.columns(3)
             f_qty = col1.number_input("現在数", min_value=0.0, value=1.0)
             f_rate = col2.number_input("1日の消費", min_value=0.0, value=0.1)
@@ -147,34 +146,36 @@ def show_registration(user_info):
                 else:
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            INSERT INTO items (group_id, category, name, jan_code,capacity, quantity, daily_rate, threshold, last_updated) 
-                            VALUES (:gid, :cat, :name, :cap, :qty, :rate, :alert, :today)
+                            INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) 
+                            VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)
                         """), {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, "qty": f_qty, "rate": f_rate, "alert": f_alert, "today": datetime.now().date()})
                     st.success(f"「{f_cat}」を新規登録しました！")
         
         else:
-            # 在庫加算モード：分類名で検索して合算
+            # 日常の購入（在庫加算）モード
             with engine.connect() as conn:
                 cats = conn.execute(text("SELECT DISTINCT category FROM items WHERE group_id=:gid"), {"gid": view_id}).fetchall()
             cat_list = [c[0] for c in cats]
             
             f_search_cat = st.selectbox("加算する分類を選択", ["直接入力/スキャンで検索"] + cat_list)
-            f_manual = st.text_input("または分類名を直接入力", value=auto_name if auto_name else "")
+            f_jan_add = st.text_input("JANコード (スキャン時は自動入力、空欄OK)", value=scanned_jan) # ★追加
+            f_manual = st.text_input("またはキーワード（分類名・商品名）", value=auto_name if auto_name else "")
             f_add_qty = st.number_input("追加数", min_value=1.0, value=1.0, step=1.0)
             
             if st.form_submit_button("在庫を加算"):
-                target = f_search_cat if f_search_cat != "直接入力/スキャンで検索" else f_manual
+                # 検索の優先順位：1.入力されたJANコード 2.選択された分類 3.入力されたキーワード
+                target = f_jan_add if f_jan_add else (f_search_cat if f_search_cat != "直接入力/スキャンで検索" else f_manual)
+                
                 with engine.begin() as conn:
-                    # 分類名(category)または商品名(name)で部分一致検索
                     res = conn.execute(text("""
                         UPDATE items SET quantity = quantity + :add, last_updated = :today 
-                        WHERE (category = :target OR name LIKE :t_like) AND group_id = :gid
+                        WHERE (jan_code = :target OR category = :target OR name LIKE :t_like) AND group_id = :gid
                     """), {"add": f_add_qty, "today": datetime.now().date(), "target": target, "t_like": f"%{target}%", "gid": view_id})
                 
                 if res.rowcount > 0:
-                    st.success(f"「{target}」の在庫を増やしました！")
+                    st.success(f"在庫を増やしました！")
                 else:
-                    st.error("該当する分類が見つかりません。「新規登録」を先に行ってください。")
+                    st.error("該当する商品が見つかりません。新規登録してください。")
 
 def show_edit_delete(user_info):
     view_id = st.session_state.view_group_id
