@@ -193,17 +193,51 @@ def show_edit_delete(user_info):
 
 # --- 管理者専用：DBメンテナンス画面 ---
 def show_admin_tool():
-    st.header("🛠 データベース管理者ツール (editモード)")
+    st.header("🛠 データベース管理者ツール (Admin Mode)")
+    
+    # --- CSVダウンロードセクション ---
+    st.subheader("📥 データのバックアップ (CSV出力)")
+    col_csv1, col_csv2 = st.columns(2)
+    
+    with engine.connect() as conn:
+        # 在庫データの取得
+        df_items = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
+        # ユーザーデータの取得
+        df_users = pd.read_sql("SELECT id, username, group_id, role FROM users ORDER BY id ASC", conn)
+
+    with col_csv1:
+        st.write("📦 在庫管理データ")
+        csv_items = df_items.to_csv(index=False).encode('utf-8-sig') # Excelで開けるようsig付き
+        st.download_button(
+            label="在庫データをダウンロード",
+            data=csv_items,
+            file_name=f"inventory_backup_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
+
+    with col_csv2:
+        st.write("👤 ユーザー管理データ")
+        csv_users = df_users.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="ユーザーデータをダウンロード",
+            data=csv_users,
+            file_name=f"users_backup_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
+
+    st.divider()
+
+    # --- データ編集セクション（既存機能） ---
     try:
-        with engine.connect() as conn:
-            df = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
-        st.subheader("📊 全データ一覧 (全グループ対象)")
-        st.dataframe(df, use_container_width=True)
+        st.subheader("📊 在庫データ一覧（全グループ対象）")
+        st.dataframe(df_items, use_container_width=True)
+        
         st.divider()
         st.subheader("✏️ データの個別修正")
-        target_id = st.selectbox("修正するアイテムの ID を選択", df['id'].tolist() if not df.empty else [])
+        target_id = st.selectbox("修正するアイテムの ID を選択", df_items['id'].tolist() if not df_items.empty else [])
+        
         if target_id:
-            row = df[df['id'] == target_id].iloc[0]
+            row = df_items[df_items['id'] == target_id].iloc[0]
             with st.form("admin_edit_form"):
                 c1, c2, c3 = st.columns(3)
                 new_cat = c1.text_input("分類", value=row['category'])
@@ -212,13 +246,21 @@ def show_admin_tool():
                 new_rate = c2.number_input("1日の消費", value=float(row['daily_rate']))
                 new_gid = c3.text_input("グループID", value=row['group_id'])
                 new_jan = c3.text_input("JANコード", value=row['jan_code'])
+                
                 if st.form_submit_button("🚀 データベースを更新"):
                     with engine.begin() as conn:
-                        conn.execute(text("UPDATE items SET category=:cat, name=:name, quantity=:q, daily_rate=:r, group_id=:gid, jan_code=:jan, last_updated=:today WHERE id=:id"),
-                                     {"cat": new_cat, "name": new_name, "q": new_qty, "r": new_rate, "gid": new_gid, "jan": new_jan, "today": datetime.now().date(), "id": target_id})
+                        conn.execute(text("""
+                            UPDATE items SET category=:cat, name=:name, quantity=:q, 
+                            daily_rate=:r, group_id=:gid, jan_code=:jan, last_updated=:today 
+                            WHERE id=:id
+                        """), {
+                            "cat": new_cat, "name": new_name, "q": new_qty, "r": new_rate, 
+                            "gid": new_gid, "jan": new_jan, "today": datetime.now().date(), "id": target_id
+                        })
                     st.success("更新しました")
                     st.rerun()
-    except Exception as e: st.error(f"エラー: {e}")
+    except Exception as e:
+        st.error(f"エラーが発生しました: {e}")
 
 # --- ログイン・メイン制御 ---
 def show_login_screen():
