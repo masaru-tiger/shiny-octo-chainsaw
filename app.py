@@ -113,6 +113,7 @@ def show_dashboard(user_info):
                 st.write(f"**{row['category']}** ({round(row['total_qty'], 1)}{row['unit']})")
                 st.caption(f"（最新登録：{row['latest_name']}）")
                 st.divider()
+
 def show_registration(user_info):
     view_id = st.session_state.view_group_id
     st.header("🛒 在庫登録・スキャン")
@@ -144,12 +145,10 @@ def show_registration(user_info):
             match = next((r for r in existing_data if r[2] == scanned_jan), None)
             
             if match:
-                # ヒットした場合：分類と商品名をセット
                 auto_cat = match[0]
                 auto_name = match[1]
                 st.info(f"💡 登録済み：【{auto_cat}】{auto_name}")
             else:
-                # 新規の場合：Web検索
                 with st.spinner('新規商品として検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
 
@@ -160,17 +159,22 @@ def show_registration(user_info):
             days_left = (qty - threshold) / rate
             next_date = datetime.now() + pd.Timedelta(days=max(0, days_left))
             date_str = next_date.strftime('%Y/%m/%d')
-            st.success(f"✅ 「{label}」の登録が完了しました！")
+            st.success(f"✅ 「{label}」の更新が完了しました！")
             st.info(f"📅 次回の購入目安は **{date_str}** ごろです。")
         else:
-            st.success(f"✅ 「{label}」の登録が完了しました！")
+            st.success(f"✅ 「{label}」の更新が完了しました！")
 
+    # --- モード1：新規分類・商品の登録 ---
     if reg_mode == "新規分類・商品の登録":
         with st.form("registration_form", clear_on_submit=True):
             st.subheader("🆕 新規マスタ登録")
+            
+            # 分類選択の条件付き表示
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
-            new_cat = st.text_input("分類を直接入力（新規の場合）")
-            f_cat = new_cat if sel_cat == "（直接入力する）" else sel_cat
+            if sel_cat == "（直接入力する）":
+                f_cat = st.text_input("新規の分類名を入力 (例: 牛乳, 洗剤)")
+            else:
+                f_cat = sel_cat
             
             f_jan = st.text_input("JANコード", value=scanned_jan)
             f_name = st.text_input("具体的な商品名", value=auto_name)
@@ -194,69 +198,43 @@ def show_registration(user_info):
                                "qty": qty_f, "rate": rate_f, "alert": alert_f, "today": datetime.now().date()})
                     announce_next_date(qty_f, rate_f, alert_f, f_cat)
 
+    # --- モード2：日常の購入（在庫加算） ---
     else:
         st.subheader("➕ 在庫の加算")
         col_a, col_b = st.columns(2)
         
-        # 1. 分類の自動選択 (indexをスキャン結果に合わせて調整)
+        # 1. 分類選択の連動と条件付き表示
         target_cat_idx = cat_list.index(auto_cat) + 1 if auto_cat in cat_list else 0
-        sel_cat_add = col_a.selectbox(
-            "分類を選択", 
-            ["（直接入力）"] + cat_list, 
-            index=target_cat_idx,
-            key="cat_selector_add"
-        )
+        sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, index=target_cat_idx, key="cat_selector_add")
         
-        # スキャンでヒットした分類、またはプルダウン選択値を反映
-        # ここがポイント：スキャン時はauto_catを優先、プルダウン変更時は選択値を優先
-        f_cat_manual = col_a.text_input("分類の確認/直接入力", value=auto_cat if (auto_cat and sel_cat_add == "（直接入力）") else (sel_cat_add if sel_cat_add != "（直接入力）" else ""))
-        current_cat = f_cat_manual
+        if sel_cat_add == "（直接入力）":
+            current_cat = col_a.text_input("分類を手入力", value=auto_cat)
+        else:
+            current_cat = sel_cat_add
 
-        # 2. 商品リストのフィルタリング
+        # 2. 商品名選択の連動と条件付き表示
         filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
-        
-        # 3. 商品名の自動選択
         target_name_idx = filtered_names.index(auto_name) + 1 if auto_name in filtered_names else 0
-        sel_name_add = col_b.selectbox(
-            f"「{current_cat}」の商品名を選択", 
-            ["（直接入力）"] + filtered_names,
-            index=target_name_idx,
-            key="name_selector_add"
-        )
-        f_name_manual = col_b.text_input("商品名の確認/直接入力", value=auto_name if (auto_name and sel_name_add == "（直接入力）") else (sel_name_add if sel_name_add != "（直接入力）" else ""))
-        current_name = f_name_manual
+        sel_name_add = col_b.selectbox(f"「{current_cat}」内の商品を選択", ["（直接入力）"] + filtered_names, index=target_name_idx, key="name_selector_add")
+        
+        if sel_name_add == "（直接入力）":
+            current_name = col_b.text_input("商品名を手入力", value=auto_name)
+        else:
+            current_name = sel_name_add
 
         with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
             f_add_qty = st.text_input("追加数", value="1.0")
             
             if st.form_submit_button("在庫を加算"):
-                t_jan = f_jan_add
-                t_cat = current_cat
-                t_name = current_name
-                add_val = float(f_add_qty)
-                
-                with engine.begin() as conn:
-                    res = conn.execute(text("""
-                        UPDATE items SET quantity = quantity + :add, last_updated = :today 
-                        WHERE group_id = :gid AND (
-                           (jan_code = :jan AND jan_code <> '') 
-                           OR (category = :cat AND name = :name)
-                        )
-                    """), {"add": add_val, "today": datetime.now().date(), 
-                           "jan": t_jan, "cat": t_cat, "name": t_name, "gid": view_id})
-                
-                if res.rowcount > 0:
-                    with engine.connect() as conn:
-                        new_data = conn.execute(text("""
-                            SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) 
-                            FROM items WHERE category = :cat AND group_id = :gid
-                        """), {"cat": t_cat, "gid": view_id}).fetchone()
-                        if new_data:
-                            announce_next_date(new_data[0], new_data[1], new_data[2], t_cat)
-                else:
-                    st.error("商品が特定できません。マスタに存在するか確認してください。")
-                    
+                try:
+                    add_val = float(f_add_qty)
+                    with engine.begin() as conn:
+                        # 確実に更新されるよう条件を調整
+                        res = conn.execute(text("""
+                            UPDATE items 
+                            SET quantity = quantity + :add, last_updated = :
+
 def show_edit_delete(user_info):
     view_id = st.session_state.view_group_id
     st.header("🔧 在庫の編集・削除")
