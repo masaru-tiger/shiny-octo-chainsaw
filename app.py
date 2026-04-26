@@ -139,8 +139,6 @@ def show_registration(user_info):
         decoded_objs = decode(img)
         if decoded_objs:
             scanned_jan = decoded_objs[0].data.decode('utf-8')
-            
-            # DB内をJANコードで検索
             match = next((r for r in existing_data if r[2] == scanned_jan), None)
             
             if match:
@@ -151,15 +149,21 @@ def show_registration(user_info):
                 with st.spinner('新規商品として検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
             
-            # 【重要】スキャン直後にセッション状態を直接更新してプルダウンを強制制御する
+            # 【重要】分類と商品名のプルダウン状態を強制同期
             if auto_cat in cat_list:
                 st.session_state["cat_sel_add"] = auto_cat
+                # この分類に属する既存の商品名リストをチェック
+                f_names = sorted(list(set([r[1] for r in existing_data if r[0] == auto_cat and r[1]])))
+                if auto_name in f_names:
+                    st.session_state["name_sel_add"] = auto_name
+                else:
+                    st.session_state["name_sel_add"] = "（直接入力）"
             else:
                 st.session_state["cat_sel_add"] = "（直接入力）"
+                st.session_state["name_sel_add"] = "（直接入力）"
 
     st.divider()
 
-    # --- ヘルパー関数 ---
     def announce_next_date(qty, rate, threshold, label):
         if rate > 0:
             days_left = (qty - threshold) / rate
@@ -175,9 +179,10 @@ def show_registration(user_info):
         with st.form("registration_form", clear_on_submit=True):
             st.subheader("🆕 新規マスタ登録")
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
-            # フォーム内では st.session_state 経由の自動入力が難しいため、valueで直接指定
-            f_cat_in = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else ""
-            f_cat = f_cat_in if sel_cat == "（直接入力する）" else sel_cat
+            
+            # 直接入力が選ばれているときだけ入力欄を出し、スキャン結果を初期値にする
+            f_cat_val = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else ""
+            f_cat = f_cat_val if sel_cat == "（直接入力する）" else sel_cat
             
             f_jan = st.text_input("JANコード", value=scanned_jan)
             f_name = st.text_input("具体的な商品名", value=auto_name)
@@ -203,9 +208,8 @@ def show_registration(user_info):
         st.subheader("➕ 在庫の加算")
         col_a, col_b = st.columns(2)
         
-        # 1. 分類選択 (indexではなく st.session_state の key で制御)
+        # 1. 分類選択
         sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, key="cat_sel_add")
-        
         if sel_cat_add == "（直接入力）":
             current_cat = col_a.text_input("分類を手入力", value=auto_cat, key="cat_manual_in")
         else:
@@ -213,10 +217,7 @@ def show_registration(user_info):
 
         # 2. 商品名選択
         filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
-        
-        # スキャン時に商品名がリストにあるか確認して初期選択位置を決定
-        target_name_idx = filtered_names.index(auto_name) + 1 if auto_name in filtered_names else 0
-        sel_name_add = col_b.selectbox(f"「{current_cat}」内の商品を選択", ["（直接入力）"] + filtered_names, index=target_name_idx, key="name_sel_add")
+        sel_name_add = col_b.selectbox(f"「{current_cat}」内の商品を選択", ["（直接入力）"] + filtered_names, key="name_sel_add")
         
         if sel_name_add == "（直接入力）":
             current_name = col_b.text_input("商品名を手入力", value=auto_name, key="name_manual_in")
@@ -225,7 +226,7 @@ def show_registration(user_info):
 
         with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
-            f_add_qty = st.text_input("追加数", value="1.0")
+            f_add_qty = st.text_input("追加数 (半角数字)", value="1.0")
             
             if st.form_submit_button("在庫を加算する"):
                 try:
@@ -240,7 +241,7 @@ def show_registration(user_info):
                         with engine.connect() as conn:
                             new_data = conn.execute(text("SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) FROM items WHERE category = :cat AND group_id = :gid"), {"cat": current_cat, "gid": view_id}).fetchone()
                             if new_data: announce_next_date(new_data[0], new_data[1], new_data[2], current_cat)
-                    else: st.error("更新対象が見つかりません。")
+                    else: st.error("マスタに一致する商品がありません。")
                 except ValueError: st.error("数値を入力してください。")
 
 def show_edit_delete(user_info):
