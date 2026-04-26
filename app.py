@@ -14,16 +14,11 @@ import urllib.parse
 def init_connection():
     try:
         db_conf = st.secrets["database"]
-        # パスワードを安全にエンコード（特殊文字対策）
         safe_password = urllib.parse.quote_plus(db_conf['password'])
-        
-        # 【修正ポイント】?pgbouncer=true を削除し、ポート6543を指定
         db_url = (
             f"postgresql://{db_conf['user']}:{safe_password}@"
             f"{db_conf['host']}:6543/{db_conf['database']}"
         )
-        
-        # SSL接続を必須にする設定を追加して安定化
         return create_engine(
             db_url, 
             connect_args={'sslmode': 'require'}, 
@@ -65,26 +60,17 @@ def search_product_by_jan(jan_code):
     except:
         return f"JAN:{jan_code}"
 
-# --- 画面描画 ---
+# --- 画面描画（ダッシュボード） ---
 def show_dashboard(user_info):
     view_id = st.session_state.view_group_id
     update_inventory_by_time(view_id)
-    
     st.header(f"📊 在庫ダッシュボード ({view_id})")
     
     with engine.connect() as conn:
-        # category ごとに quantity を合計（SUM）し、一番新しい情報を取得する
         query = text("""
-            SELECT 
-                category, 
-                SUM(quantity) as total_qty, 
-                MAX(capacity) as unit, 
-                SUM(daily_rate) as total_rate, 
-                MAX(threshold) as max_threshold,
-                MAX(name) as latest_name
-            FROM items 
-            WHERE group_id=:gid 
-            GROUP BY category
+            SELECT category, SUM(quantity) as total_qty, MAX(capacity) as unit, 
+                   SUM(daily_rate) as total_rate, MAX(threshold) as max_threshold, MAX(name) as latest_name
+            FROM items WHERE group_id=:gid GROUP BY category
         """)
         df = pd.read_sql(query, conn, params={"gid": view_id})
     
@@ -92,7 +78,6 @@ def show_dashboard(user_info):
         st.info("登録されている在庫はありません。")
         return
 
-    # ステータス判定（合計値で判定）
     def get_status(row):
         days_left = row['total_qty'] / row['total_rate'] if row['total_rate'] > 0 else 999
         if row['total_qty'] <= row['max_threshold']: return "🔴 もうすぐ切れる"
@@ -100,8 +85,6 @@ def show_dashboard(user_info):
         else: return "🔵 まだ余裕ある"
     
     df['status'] = df.apply(get_status, axis=1)
-    
-    # 表示
     cols = st.columns(3)
     states = ["🔴 もうすぐ切れる", "🟡 そろそろ切れる", "🔵 まだ余裕ある"]
     for i, state in enumerate(states):
@@ -109,139 +92,91 @@ def show_dashboard(user_info):
             st.subheader(state)
             sub_df = df[df['status'] == state]
             for _, row in sub_df.iterrows():
-                # 分類名を大きく表示し、合計数量を出す
                 st.write(f"**{row['category']}** ({round(row['total_qty'], 1)}{row['unit']})")
                 st.caption(f"（最新登録：{row['latest_name']}）")
                 st.divider()
 
+# --- 画面描画（登録・スキャン） ---
 def show_registration(user_info):
     view_id = st.session_state.view_group_id
     st.header("🛒 在庫登録・スキャン")
-    
     reg_mode = st.radio("登録モード", ["日常の購入（在庫加算）", "新規分類・商品の登録"], horizontal=True)
     img_file = st.camera_input("バーコードスキャン")
-    
-    # 自動入力用の変数初期化
     scanned_jan, auto_name, auto_cat = "", "", ""
     
-    # 既存データをDBから取得
     with engine.connect() as conn:
-        existing_data = conn.execute(
-            text("SELECT category, name, jan_code FROM items WHERE group_id=:gid"), 
-            {"gid": view_id}
-        ).fetchall()
-    
+        existing_data = conn.execute(text("SELECT category, name, jan_code FROM items WHERE group_id=:gid"), {"gid": view_id}).fetchall()
     cat_list = sorted(list(set([r[0] for r in existing_data if r[0]])))
 
-    # スキャン処理と自動検索
     if img_file:
         img = Image.open(img_file)
         decoded_objs = decode(img)
         if decoded_objs:
             scanned_jan = decoded_objs[0].data.decode('utf-8')
             match = next((r for r in existing_data if r[2] == scanned_jan), None)
-            
             if match:
-                auto_cat = match[0]
-                auto_name = match[1]
+                auto_cat, auto_name = match[0], match[1]
                 st.success(f"✅ 登録済み：【{auto_cat}】{auto_name}")
             else:
                 with st.spinner('新規商品として検索中...'):
                     auto_name = search_product_by_jan(scanned_jan)
             
-            # プルダウン状態を強制同期
+            # セッション同期
             if auto_cat in cat_list:
                 st.session_state["cat_sel_add"] = auto_cat
                 f_names = sorted(list(set([r[1] for r in existing_data if r[0] == auto_cat and r[1]])))
-                if auto_name in f_names:
-                    st.session_state["name_sel_add"] = auto_name
-                else:
-                    st.session_state["name_sel_add"] = "（直接入力）"
+                st.session_state["name_sel_add"] = auto_name if auto_name in f_names else "（直接入力）"
             else:
                 st.session_state["cat_sel_add"] = "（直接入力）"
                 st.session_state["name_sel_add"] = "（直接入力）"
 
     st.divider()
 
-    def announce_next_date(qty, rate, threshold, label):
-        if rate > 0:
-            days_left = (qty - threshold) / rate
-            next_date = datetime.now() + pd.Timedelta(days=max(0, days_left))
-            date_str = next_date.strftime('%Y/%m/%d')
-            st.success(f"✅ 「{label}」の更新が完了しました！")
-            st.info(f"📅 次回の購入目安は **{date_str}** ごろです。")
-        else:
-            st.success(f"✅ 「{label}」の更新が完了しました！")
-
-    # --- モード1：新規分類・商品の登録 ---
+    # モード切り替えとフォーム表示
     if reg_mode == "新規分類・商品の登録":
         with st.form("registration_form", clear_on_submit=True):
             st.subheader("🆕 新規マスタ登録")
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
-            f_cat_val = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else ""
-            f_cat = f_cat_val if sel_cat == "（直接入力する）" else sel_cat
-            f_jan = st.text_input("JANコード", value=scanned_jan)
-            f_name = st.text_input("具体的な商品名", value=auto_name)
+            f_cat = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else sel_cat
+            f_jan, f_name = st.text_input("JANコード", value=scanned_jan), st.text_input("具体的な商品名", value=auto_name)
             f_cap = st.text_input("単位", value="個")
             c1, c2, c3 = st.columns(3)
-            f_qty = c1.text_input("現在数", value="1.0")
-            f_rate = c2.text_input("1日の消費", value="0.1")
-            f_alert = c3.text_input("警告しきい値", value="1.0")
+            f_qty, f_rate, f_alert = c1.text_input("現在数", "1.0"), c2.text_input("1日の消費", "0.1"), c3.text_input("警告しきい値", "1.0")
             if st.form_submit_button("新規マスタとして登録"):
-                if not f_cat or not f_name: st.error("必須項目を入力してください")
-                else:
-                    try:
-                        with engine.begin() as conn:
-                            conn.execute(text("INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)"),
-                                         {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, "qty": float(f_qty), "rate": float(f_rate), "alert": float(f_alert), "today": datetime.now().date()})
-                        announce_next_date(float(f_qty), float(f_rate), float(f_alert), f_cat)
-                    except: st.error("登録に失敗しました")
-
-    # --- モード2：日常の購入（在庫加算） ---
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)"),
+                                     {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, "qty": float(f_qty), "rate": float(f_rate), "alert": float(f_alert), "today": datetime.now().date()})
+                    st.success("登録完了！")
+                except: st.error("登録失敗")
     else:
+        # 在庫加算ロジック
         st.subheader("➕ 在庫の加算")
         col_a, col_b = st.columns(2)
-        
         sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, key="cat_sel_add")
         current_cat = col_a.text_input("分類を手入力", value=auto_cat, key="cat_manual_in") if sel_cat_add == "（直接入力）" else sel_cat_add
-
         filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
         sel_name_add = col_b.selectbox(f"「{current_cat}」内の商品を選択", ["（直接入力）"] + filtered_names, key="name_sel_add")
         current_name = col_b.text_input("商品名を手入力", value=auto_name, key="name_manual_in") if sel_name_add == "（直接入力）" else sel_name_add
 
         with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
-            f_add_qty = st.text_input("追加数 (半角数字)", value="1.0")
-            
+            f_add_qty = st.text_input("追加数", value="1.0")
             if st.form_submit_button("在庫を加算する"):
                 try:
-                    add_val = float(f_add_qty)
                     with engine.begin() as conn:
-                        # 【修正】条件を厳密化。JAN一致、または「分類 AND 商品名」の両方が一致する場合のみ更新
-                        res = conn.execute(text("""
-                            UPDATE items 
-                            SET quantity = quantity + :add, last_updated = :today 
-                            WHERE group_id = :gid 
-                            AND (
-                                (jan_code = :jan AND jan_code <> '') 
-                                OR (category = :cat AND name = :name)
-                            )
-                        """), {"add": add_val, "today": datetime.now().date(), "jan": f_jan_add, "cat": current_cat, "name": current_name, "gid": view_id})
-                    
-                    if res.rowcount > 0:
-                        with engine.connect() as conn:
-                            # 消費期限予測などは分類単位で合算して計算
-                            new_data = conn.execute(text("SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) FROM items WHERE category = :cat AND group_id = :gid"), {"cat": current_cat, "gid": view_id}).fetchone()
-                            if new_data: announce_next_date(new_data[0], new_data[1], new_data[2], current_cat)
-                    else: st.error("一致する商品がありません。")
-                except ValueError: st.error("数値を入力してください。")
+                        res = conn.execute(text("UPDATE items SET quantity = quantity + :add, last_updated = :today WHERE group_id = :gid AND ((jan_code = :jan AND jan_code <> '') OR (category = :cat AND name = :name))"),
+                                           {"add": float(f_add_qty), "today": datetime.now().date(), "jan": f_jan_add, "cat": current_cat, "name": current_name, "gid": view_id})
+                    if res.rowcount > 0: st.success("加算完了！")
+                    else: st.error("商品が見つかりません")
+                except: st.error("数値エラー")
 
+# --- 画面描画（編集・削除） ---
 def show_edit_delete(user_info):
     view_id = st.session_state.view_group_id
     st.header("🔧 在庫の編集・削除")
     with engine.connect() as conn:
         items = conn.execute(text("SELECT id, category, name, quantity FROM items WHERE group_id=:gid"), {"gid": view_id}).fetchall()
-
     for item in items:
         item_id, cat, name, qty = item
         with st.expander(f"📦 【{cat}】 {name}"):
@@ -256,43 +191,85 @@ def show_edit_delete(user_info):
                     conn.execute(text("DELETE FROM items WHERE id=:id"), {"id": item_id})
                 st.rerun()
 
+# --- 管理者専用：DBメンテナンス画面 ---
+def show_admin_tool():
+    st.header("🛠 データベース管理者ツール (editモード)")
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
+        st.subheader("📊 全データ一覧 (全グループ対象)")
+        st.dataframe(df, use_container_width=True)
+        st.divider()
+        st.subheader("✏️ データの個別修正")
+        target_id = st.selectbox("修正するアイテムの ID を選択", df['id'].tolist() if not df.empty else [])
+        if target_id:
+            row = df[df['id'] == target_id].iloc[0]
+            with st.form("admin_edit_form"):
+                c1, c2, c3 = st.columns(3)
+                new_cat = c1.text_input("分類", value=row['category'])
+                new_name = c1.text_input("商品名", value=row['name'])
+                new_qty = c2.number_input("現在数", value=float(row['quantity']))
+                new_rate = c2.number_input("1日の消費", value=float(row['daily_rate']))
+                new_gid = c3.text_input("グループID", value=row['group_id'])
+                new_jan = c3.text_input("JANコード", value=row['jan_code'])
+                if st.form_submit_button("🚀 データベースを更新"):
+                    with engine.begin() as conn:
+                        conn.execute(text("UPDATE items SET category=:cat, name=:name, quantity=:q, daily_rate=:r, group_id=:gid, jan_code=:jan, last_updated=:today WHERE id=:id"),
+                                     {"cat": new_cat, "name": new_name, "q": new_qty, "r": new_rate, "gid": new_gid, "jan": new_jan, "today": datetime.now().date(), "id": target_id})
+                    st.success("更新しました")
+                    st.rerun()
+    except Exception as e: st.error(f"エラー: {e}")
+
+# --- ログイン・メイン制御 ---
 def show_login_screen():
     st.title("📦 Smart Stock System v2")
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
     with tab1:
         with st.form("login"):
-            un = st.text_input("ユーザー名")
-            pw = st.text_input("パスワード", type="password")
+            un, pw = st.text_input("ユーザー名"), st.text_input("パスワード", type="password")
             if st.form_submit_button("ログイン"):
+                # 管理者ログイン判定
+                if un == "edit" and pw == "edit":
+                    st.session_state.logged_in = True
+                    st.session_state.is_admin = True
+                    st.session_state.user_info = {'username': '管理者', 'group_id': 'ADMIN', 'role': 'admin'}
+                    st.session_state.view_group_id = 'ADMIN'
+                    st.rerun()
+                # 通常ログイン
                 with engine.connect() as conn:
                     row = conn.execute(text("SELECT id, username, password, group_id, role FROM users WHERE username=:un"), {"un": un}).fetchone()
                 if row and row[2] == hash_password(pw):
-                    st.session_state.logged_in = True
+                    st.session_state.logged_in, st.session_state.is_admin = True, False
                     st.session_state.user_info = {'id': row[0], 'username': row[1], 'group_id': row[3], 'role': row[4]}
                     st.session_state.view_group_id = row[3]
                     st.rerun()
-                else:
-                    st.error("ログイン失敗")
+                else: st.error("ログイン失敗")
     with tab2:
         with st.form("signup"):
-            new_un = st.text_input("新ユーザー名")
-            new_pw = st.text_input("パスワード", type="password")
+            new_un, new_pw = st.text_input("新ユーザー名"), st.text_input("パスワード", type="password")
             if st.form_submit_button("作成"):
                 new_gid = str(uuid.uuid4())[:8]
                 with engine.begin() as conn:
                     conn.execute(text("INSERT INTO users (username, password, group_id, role) VALUES (:un, :pw, :gid, :r)"),
                                  {"un": new_un, "pw": hash_password(new_pw), "gid": new_gid, "r": 'user'})
-                st.success("作成しました！ログインしてください")
+                st.success("作成完了")
 
 def main():
     st.set_page_config(page_title="Smart Stock", layout="wide")
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    if 'is_admin' not in st.session_state: st.session_state.is_admin = False
+    
     if not st.session_state.logged_in:
         show_login_screen()
     else:
         user = st.session_state.user_info
         st.sidebar.write(f"👤 {user['username']}")
-        menu = st.sidebar.radio("メニュー", ["ダッシュボード", "登録・スキャン", "編集・削除"])
+        
+        menu_list = ["ダッシュボード", "登録・スキャン", "編集・削除"]
+        if st.session_state.is_admin:
+            menu_list.append("🛠 DBメンテナンス")
+            
+        menu = st.sidebar.radio("メニュー", menu_list)
         if st.sidebar.button("ログアウト"):
             st.session_state.logged_in = False
             st.rerun()
@@ -300,6 +277,7 @@ def main():
         if menu == "ダッシュボード": show_dashboard(user)
         elif menu == "登録・スキャン": show_registration(user)
         elif menu == "編集・削除": show_edit_delete(user)
+        elif menu == "🛠 DBメンテナンス": show_admin_tool()
 
 if __name__ == "__main__":
     main()
