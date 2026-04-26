@@ -140,7 +140,6 @@ def show_registration(user_info):
         if decoded_objs:
             scanned_jan = decoded_objs[0].data.decode('utf-8')
             st.success(f"JAN検知: {scanned_jan}")
-            # JANで既存商品を検索
             match = next((r for r in existing_data if r[2] == scanned_jan), None)
             if match:
                 auto_cat = match[0]
@@ -152,10 +151,21 @@ def show_registration(user_info):
 
     st.divider()
 
+    # 次回購入日を計算して表示するヘルパー関数
+    def announce_next_date(qty, rate, threshold, label):
+        if rate > 0:
+            # (現在数 - しきい値) / 1日の消費 = あと何日もつか
+            days_left = (qty - threshold) / rate
+            next_date = datetime.now() + pd.Timedelta(days=max(0, days_left))
+            date_str = next_date.strftime('%Y/%m/%d')
+            st.success(f"✅ 「{label}」の登録が完了しました！")
+            st.info(f"📅 次回の購入目安は **{date_str}** ごろです。")
+        else:
+            st.success(f"✅ 「{label}」の登録が完了しました！")
+
     with st.form("inventory_form", clear_on_submit=True):
         if reg_mode == "新規分類・商品の登録":
             st.subheader("🆕 新規マスタ登録")
-            # 分類：プルダウン + 直接入力
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
             new_cat = st.text_input("分類を直接入力（新規の場合）")
             f_cat = new_cat if sel_cat == "（直接入力する）" else sel_cat
@@ -164,8 +174,6 @@ def show_registration(user_info):
             f_name = st.text_input("具体的な商品名", value=auto_name)
             f_cap = st.text_input("単位 (例: 本, パック)", value="個")
             
-            # 数値入力（step=None でプラスマイナスボタンを非表示にする ※Streamlitの仕様上、完全に消すにはnumber_inputではなくtext_inputで代用するのが確実です）
-            # ここでは数値のみ受け付ける text_input 形式でUIをスッキリさせます
             c1, c2, c3 = st.columns(3)
             f_qty = c1.text_input("現在数", value="1.0")
             f_rate = c2.text_input("1日の消費", value="0.1")
@@ -175,17 +183,17 @@ def show_registration(user_info):
                 if not f_cat or not f_name:
                     st.error("分類と商品名は必須です")
                 else:
+                    qty_f, rate_f, alert_f = float(f_qty), float(f_rate), float(f_alert)
                     with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO items (group_id, category, name, jan_code, capacity, quantity, daily_rate, threshold, last_updated) 
                             VALUES (:gid, :cat, :name, :jan, :cap, :qty, :rate, :alert, :today)
                         """), {"gid": view_id, "cat": f_cat, "name": f_name, "jan": f_jan, "cap": f_cap, 
-                               "qty": float(f_qty), "rate": float(f_rate), "alert": float(f_alert), "today": datetime.now().date()})
-                    st.success(f"「{f_cat}」を登録しました")
+                               "qty": qty_f, "rate": rate_f, "alert": alert_f, "today": datetime.now().date()})
+                    announce_next_date(qty_f, rate_f, alert_f, f_cat)
 
         else:
             st.subheader("➕ 在庫の加算")
-            # 分類・商品名の選択（プルダウン or 直接入力）
             col_a, col_b = st.columns(2)
             sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, 
                                           index=cat_list.index(auto_cat)+1 if auto_cat in cat_list else 0)
@@ -196,27 +204,34 @@ def show_registration(user_info):
             f_name_manual = col_b.text_input("商品名を直接入力/スキャン結果", value=auto_name if not auto_name in name_list else "")
             
             f_jan_add = st.text_input("JANコード (スキャン時は自動入力)", value=scanned_jan)
-            
             f_add_qty = st.text_input("追加数", value="1.0")
             
             if st.form_submit_button("在庫を加算"):
-                # 検索優先度: JAN > 分類 > 商品名
                 t_jan = f_jan_add
                 t_cat = sel_cat_add if sel_cat_add != "（直接入力）" else f_cat_manual
                 t_name = sel_name_add if sel_name_add != "（直接入力）" else f_name_manual
+                add_val = float(f_add_qty)
                 
                 with engine.begin() as conn:
                     res = conn.execute(text("""
                         UPDATE items SET quantity = quantity + :add, last_updated = :today 
-                        WHERE (jan_code = :jan AND jan_code <> '') 
+                        WHERE group_id = :gid AND (
+                           (jan_code = :jan AND jan_code <> '') 
                            OR (category = :cat AND :cat <> '')
                            OR (name = :name AND :name <> '')
-                        AND group_id = :gid
-                    """), {"add": float(f_add_qty), "today": datetime.now().date(), 
+                        )
+                    """), {"add": add_val, "today": datetime.now().date(), 
                            "jan": t_jan, "cat": t_cat, "name": t_name, "gid": view_id})
                 
                 if res.rowcount > 0:
-                    st.success("在庫を加算しました！")
+                    # 更新後の最新値を取得して次回購入日を表示
+                    with engine.connect() as conn:
+                        new_data = conn.execute(text("""
+                            SELECT SUM(quantity), SUM(daily_rate), MAX(threshold) 
+                            FROM items WHERE category = :cat AND group_id = :gid
+                        """), {"cat": t_cat, "gid": view_id}).fetchone()
+                        if new_data:
+                            announce_next_date(new_data[0], new_data[1], new_data[2], t_cat)
                 else:
                     st.error("一致する商品が見つかりません。新規登録してください。")
 
