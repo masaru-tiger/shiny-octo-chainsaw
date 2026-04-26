@@ -119,7 +119,7 @@ def show_registration(user_info):
     st.header("🛒 在庫登録・スキャン")
     
     reg_mode = st.radio("登録モード", ["日常の購入（在庫加算）", "新規分類・商品の登録"], horizontal=True)
-    img_file = st.camera_input("バーコードスキャン")
+    img_file = st.camera_input("バーコードスコードスキャン")
     
     # 自動入力用の変数初期化
     scanned_jan, auto_name, auto_cat = "", "", ""
@@ -169,15 +169,15 @@ def show_registration(user_info):
         with st.form("registration_form", clear_on_submit=True):
             st.subheader("🆕 新規マスタ登録")
             
+            # 分類選択
             sel_cat = st.selectbox("既存の分類から選択", ["（直接入力する）"] + cat_list)
-            if sel_cat == "（直接入力する）":
-                f_cat = st.text_input("新規の分類名を入力 (例: 牛乳, 洗剤)")
-            else:
-                f_cat = sel_cat
+            # 自動入力がある場合はその値を、ない場合は空文字をセット
+            f_cat_manual = st.text_input("新規の分類名を入力", value=auto_cat) if sel_cat == "（直接入力する）" else ""
+            f_cat = f_cat_manual if sel_cat == "（直接入力する）" else sel_cat
             
             f_jan = st.text_input("JANコード", value=scanned_jan)
             f_name = st.text_input("具体的な商品名", value=auto_name)
-            f_cap = st.text_input("単位 (例: 本, パック)", value="個")
+            f_cap = st.text_input("単位", value="個")
             
             c1, c2, c3 = st.columns(3)
             f_qty = c1.text_input("現在数", value="1.0")
@@ -205,14 +205,17 @@ def show_registration(user_info):
         st.subheader("➕ 在庫の加算")
         col_a, col_b = st.columns(2)
         
+        # 1. 分類選択：スキャンヒット時はその分類を自動選択
         target_cat_idx = cat_list.index(auto_cat) + 1 if auto_cat in cat_list else 0
         sel_cat_add = col_a.selectbox("分類を選択", ["（直接入力）"] + cat_list, index=target_cat_idx, key="cat_sel_add")
         
+        # 直接入力が選ばれている、あるいはスキャンで新しい分類が来た場合のみ入力欄を表示
         if sel_cat_add == "（直接入力）":
             current_cat = col_a.text_input("分類を手入力", value=auto_cat, key="cat_manual_in")
         else:
             current_cat = sel_cat_add
 
+        # 2. 商品名選択
         filtered_names = sorted(list(set([r[1] for r in existing_data if r[0] == current_cat and r[1]])))
         target_name_idx = filtered_names.index(auto_name) + 1 if auto_name in filtered_names else 0
         sel_name_add = col_b.selectbox(f"「{current_cat}」内の商品を選択", ["（直接入力）"] + filtered_names, index=target_name_idx, key="name_sel_add")
@@ -224,12 +227,13 @@ def show_registration(user_info):
 
         with st.form("addition_form", clear_on_submit=True):
             f_jan_add = st.text_input("JANコード", value=scanned_jan)
-            f_add_qty = st.text_input("追加数 (半角数字)", value="1.0")
+            f_add_qty = st.text_input("追加数", value="1.0")
             
             if st.form_submit_button("在庫を加算する"):
                 try:
                     add_val = float(f_add_qty)
                     with engine.begin() as conn:
+                        # 確実にヒットするよう条件を調整
                         res = conn.execute(text("""
                             UPDATE items 
                             SET quantity = quantity + :add, last_updated = :today 
@@ -249,7 +253,7 @@ def show_registration(user_info):
                             if new_data:
                                 announce_next_date(new_data[0], new_data[1], new_data[2], current_cat)
                     else:
-                        st.error(f"「{current_cat}」に一致するデータが見つかりません。")
+                        st.error(f"「{current_cat}」に一致するデータがありません。")
                 except ValueError:
                     st.error("追加数には数字を入力してください。")
 
