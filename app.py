@@ -421,7 +421,7 @@ def show_line_linking_flow(username):
         """)
         
         # QRコード表示（LINE Developersから取得したURLを入れる）
-        st.image("https://qr-official.line.me/sid/L/your_bot_id.png", width=250)
+        st.image("QRcode_LINE.png", width=250)
         
         if st.button("✅ メッセージを送信しました"):
             # 「一時預かり所」をチェック（直近2分以内のデータを探す）
