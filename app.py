@@ -348,28 +348,36 @@ def show_admin_tool():
         
         st.divider()
         st.subheader("✏️ データの個別修正")
-        target_id = st.selectbox("修正するアイテムの ID を選択", df_items['id'].tolist() if not df_items.empty else [])
+        # アイテムIDの選択リスト
+        item_ids = df_items['id'].tolist() if not df_items.empty else []
+        target_id = st.selectbox("修正するアイテムの ID を選択", item_ids)
         
         if target_id:
+            # 選択された行を取得
             row = df_items[df_items['id'] == target_id].iloc[0]
             with st.form("admin_edit_form"):
                 c1, c2, c3 = st.columns(3)
-                new_cat = c1.text_input("分類", value=row['category'])
-                new_name = c1.text_input("商品名", value=row['name'])
-                new_qty = c2.number_input("現在数", value=float(row['quantity']))
-                new_rate = c2.number_input("1日の消費", value=float(row['daily_rate']))
-                new_gid = c3.text_input("グループID", value=row['group_id'])
-                new_jan = c3.text_input("JANコード", value=row['jan_code'])
+                new_cat = c1.text_input("分類", value=row['分類'])
+                new_name = c1.text_input("商品名", value=row['商品名'])
+                new_qty = c2.number_input("現在数", value=float(row['現在数']))
+                new_rate = c2.number_input("1日の消費", value=float(row['1日の消費']))
+                new_jan = c3.text_input("JANコード", value=row['JANコード'])
                 
                 if st.form_submit_button("🚀 データベースを更新"):
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            UPDATE items SET category=:cat, name=:name, quantity=:q, 
-                            daily_rate=:r, group_id=:gid, jan_code=:jan, last_updated=:today 
-                            WHERE id=:id
+                            UPDATE items SET 
+                                category = :cat, 
+                                name = :name, 
+                                quantity = :q, 
+                                daily_rate = :r, 
+                                jan_code = :jan, 
+                                last_updated = :today 
+                            WHERE id = :id
                         """), {
-                            "cat": new_cat, "name": new_name, "q": new_qty, "r": new_rate, 
-                            "gid": new_gid, "jan": new_jan, "today": datetime.now().date(), "id": target_id
+                            "cat": new_cat, "name": new_name, "q": new_qty, 
+                            "r": new_rate, "jan": new_jan, 
+                            "today": datetime.now().date(), "id": target_id
                         })
                     st.success("更新しました")
                     st.rerun()
