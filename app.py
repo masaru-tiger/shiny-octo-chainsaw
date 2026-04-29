@@ -494,24 +494,7 @@ with tab2:
             # 連携フローを表示
             show_line_linking_flow(st.session_state.new_user_created)
 
-def main():
-    # グローバルな「一時預かり所」　※メインで実装することで確実に実行する 
-    if "webhook_queue" not in st.session_state:
-        st.session_state.webhook_queue = []
-    # FastAPIサーバーをバックグラウンドで1回だけ起動
-    if "api_started" not in st.session_state:
-        thread = Thread(target=start_webhook_server, daemon=True)
-        thread.start()
-        st.session_state.api_started = True
-        
-    st.set_page_config(page_title="Smart Stock", layout="wide")
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    if 'is_admin' not in st.session_state: 
-        st.session_state.is_admin = False
-    
-    if not st.session_state.logged_in:
-        show_login_screen()
+
     else:
         user = st.session_state.user_info
         st.sidebar.write(f"👤 {user['username']}")
