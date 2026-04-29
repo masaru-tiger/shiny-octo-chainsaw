@@ -395,7 +395,7 @@ def show_line_linking_flow(username):
         """)
         
         # QRコード表示（LINE Developersから取得したURLを入れる）
-        st.image("QRcode_LINE.png", width=250)
+        st.image("QRcode_LINE.png", width=200)
 
         # --- ID入力エリア ---
         line_id_input = st.text_input("ここにコピーしたLINE IDを貼り付けてください", 
@@ -406,7 +406,6 @@ def show_line_linking_flow(username):
             # 入力バリデーション（空でないか、Uで始まっているか）
             if line_id_input and line_id_input.startswith("U"):
                 hashed_id = hash_data(line_id_input)
-                
                 try:
                     with engine.begin() as conn:
                         # usersテーブルのline_user_idを更新
@@ -414,19 +413,39 @@ def show_line_linking_flow(username):
                                      {"lid": hashed_id, "un": username})
                     
                     st.success("🎉 LINE連携が完了しました！")
-                    time.sleep(1.5)
-                    
-                    # ログイン状態へ移行
-                    if "new_user_created" in st.session_state:
-                        del st.session_state.new_user_created
-                    st.session_state.logged_in = True
-                    st.rerun()
+                    time.sleep(1.0)
+
+                    # 【重要】ここでログインに必要な情報をセッションに格納する
+                    complete_login_after_signup(username)
                     
                 except Exception as e:
                     st.error(f"DB保存エラー: {e}")
             else:
                 st.error("正しいLINE IDを入力してください（Uから始まる文字列です）")
 
+# --- 新規登録からログイン状態へ移行するための共通関数 ---
+def complete_login_after_signup(username):
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT id, username, group_id, role FROM users WHERE username=:un"), 
+                          {"un": username}).fetchone()
+    
+    if row:
+        # main()で必要としている「user_info」をここで作成する
+        st.session_state.user_info = {
+            'id': row[0], 
+            'username': row[1], 
+            'group_id': row[2], 
+            'role': row[3]
+        }
+        st.session_state.view_group_id = row[2]
+        st.session_state.logged_in = True
+        st.session_state.is_admin = False
+        
+        # 不要になった新規登録フラグを削除
+        if "new_user_created" in st.session_state:
+            del st.session_state.new_user_created
+        
+        st.rerun()
                 
 # --- ログイン・画面制御 ---
 def show_login_screen():
