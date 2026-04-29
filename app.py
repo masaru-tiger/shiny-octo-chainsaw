@@ -478,7 +478,7 @@ def show_login_screen():
                     st.rerun()
                 else: 
                     st.error("ログイン失敗：ユーザー名またはパスワードが正しくありません")
-with tab2:
+    with tab2:
         # 新規登録後のLINE連携フラグ
         if "new_user_created" not in st.session_state:
             with st.form("signup"):
