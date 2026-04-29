@@ -270,10 +270,11 @@ def show_admin_tool():
                 i.name as "商品名",
                 h.change_qty as "加算数",
                 i.capacity as "容量",
-                h.username as "ユーザーID",
+                u.username as "ユーザー名",
                 h.item_id as "アイテムID"
             FROM inventory_history h
             LEFT JOIN items i ON h.item_id = i.id
+            LEFT JOIN users u ON h.group_id = u.group_id
             ORDER BY h.created_at DESC
         """, conn)
 
