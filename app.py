@@ -247,7 +247,7 @@ def show_admin_tool():
         # 在庫マスタ
         df_items = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
         # ユーザーデータ
-        df_users = pd.read_sql("SELECT id, username, group_id, role FROM users ORDER BY id ASC", conn)
+        df_users = pd.read_sql("SELECT id, username, group_id, role, line_user_id FROM users ORDER BY id ASC", conn)
         
         # 履歴データの取得 (LEFT JOINで名前を紐付け。名前が取れなくても全行出す)
         df_history = pd.read_sql("""
@@ -361,6 +361,36 @@ def show_admin_tool():
                     st.rerun()
     except Exception as e:
         st.error(f"エラーが発生しました: {e}")
+
+    # --- 4. ユーザー管理セクション ---
+    st.subheader("👥 登録ユーザー一覧")
+    if not df_users.empty:
+        # ユーザー一覧を表示
+        st.dataframe(df_users, use_container_width=True)
+        
+        # 不要なユーザーを削除する機能
+        st.write("⚠️ **重複したテストユーザーの削除**")
+        target_user_id = st.selectbox("削除するユーザーIDを選択", 
+                                     options=df_users['id'].tolist(),
+                                     format_func=lambda x: f"ID: {x} / {df_users[df_users['id']==x]['username'].values[0]}")
+        
+        if st.button("🚨 選択したユーザーを削除する"):
+            # 自分(admin)を消さないようにチェック
+            selected_name = df_users[df_users['id']==target_user_id]['username'].values[0]
+            if selected_name == "admin":
+                st.error("管理者(admin)は削除できません。")
+            else:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": target_user_id})
+                    st.success(f"ユーザー「{selected_name}」を削除しました。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"削除失敗: {e}")
+    else:
+        st.info("ユーザーデータが存在しません。")
+
+    st.divider()
 
 
 # ==========================================
