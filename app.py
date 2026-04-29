@@ -451,16 +451,18 @@ def show_line_linking_flow(username):
                 st.error("メッセージが確認できませんでした。公式アカウントに「hello」と送りましたか？")
                 st.caption("※サーバーに届くまで数秒かかる場合があります。少し待ってから再度押してください。")
                 
-# --- ログイン・メイン制御 ---
+# --- ログイン・画面制御 ---
 def show_login_screen():
     st.title("🐨 ストックコアラ v2")
+    
+    # ここで tab1 と tab2 を定義しています
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
     
     with tab1:
         with st.form("login"):
             un, pw = st.text_input("ユーザー名"), st.text_input("パスワード", type="password")
             if st.form_submit_button("ログイン"):
-                # 管理者ログイン判定＝ admin / admin
+                # 管理者ログイン判定
                 if un == "admin" and pw == "admin":
                     st.session_state.logged_in = True
                     st.session_state.is_admin = True
@@ -479,7 +481,7 @@ def show_login_screen():
                     st.rerun()
                 else: 
                     st.error("ログイン失敗：ユーザー名またはパスワードが正しくありません")
-                    
+
     with tab2:
         # 新規登録後のLINE連携フラグ
         if "new_user_created" not in st.session_state:
