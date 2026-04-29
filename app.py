@@ -431,6 +431,7 @@ def show_line_linking_flow(username):
 # --- ログイン・画面制御 ---
 def show_login_screen():
     st.title("🐨 ストックコアラ v2")
+    st.title("DBリセットのため、もう一度新規登録お願いします。サカイ")
 
     # 1. 新規登録直後のLINE連携フロー中なら、タブを出さずに連携画面だけ表示
     if "new_user_created" in st.session_state:
