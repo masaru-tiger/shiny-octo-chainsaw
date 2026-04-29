@@ -245,7 +245,20 @@ def show_admin_tool():
     
     with engine.connect() as conn:
         # 在庫マスタ
-        df_items = pd.read_sql("SELECT * FROM items ORDER BY id ASC", conn)
+        df_items = pd.read_sql("""
+            SELECT 
+                i.id, 
+                u.username as "ユーザー名", 
+                i.category as "分類", 
+                i.name as "商品名", 
+                i.capacity as "容量",
+                i.quantity as "現在数",
+                i.daily_rate as "1日の消費",
+                i.jan_code as "JANコード"
+            FROM items i
+            LEFT JOIN users u ON i.group_id = u.group_id
+            ORDER BY i.id ASC
+        """, conn)
         # ユーザーデータ
         df_users = pd.read_sql("SELECT id, username, group_id, role, line_user_id FROM users ORDER BY id ASC", conn)
         
@@ -257,7 +270,7 @@ def show_admin_tool():
                 i.name as "商品名",
                 h.change_qty as "加算数",
                 i.capacity as "容量",
-                h.group_id as "実行グループ",
+                h.username as "ユーザーID",
                 h.item_id as "アイテムID"
             FROM inventory_history h
             LEFT JOIN items i ON h.item_id = i.id
