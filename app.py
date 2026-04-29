@@ -455,6 +455,7 @@ def show_line_linking_flow(username):
 def show_login_screen():
     st.title("🐨 ストックコアラ v2")
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
+    
     with tab1:
         with st.form("login"):
             un, pw = st.text_input("ユーザー名"), st.text_input("パスワード", type="password")
@@ -478,6 +479,7 @@ def show_login_screen():
                     st.rerun()
                 else: 
                     st.error("ログイン失敗：ユーザー名またはパスワードが正しくありません")
+                    
     with tab2:
         # 新規登録後のLINE連携フラグ
         if "new_user_created" not in st.session_state:
