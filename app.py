@@ -71,7 +71,7 @@ async def line_webhook(request: Request):
 
 def start_webhook_server():
     # Streamlitとは別のポート(8000)でWebサーバーを起動
-    uvicorn.run(api, host="0.0.0.0", port=8000)
+    # uvicorn.run(api, host="0.0.0.0", port=8000)
 
 
 # --- 自動計算ロジック ---
