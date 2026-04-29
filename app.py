@@ -409,6 +409,7 @@ def show_line_linking_flow(username):
             st.session_state.link_status = "waiting"
             st.rerun()
         if c2.button("今はしない（ダッシュボードへ）"):
+            del st.session_state.new_user_created
             st.session_state.logged_in = True
             st.rerun()
 
@@ -443,6 +444,7 @@ def show_line_linking_flow(username):
                                      {"lid": hashed_id, "un": username})
                     st.success("🎉 LINE連携が完了しました！")
                     time.sleep(2)
+                    del st.session_state.new_user_created
                     st.session_state.logged_in = True
                     st.rerun()
                 except Exception as e:
@@ -454,8 +456,14 @@ def show_line_linking_flow(username):
 # --- ログイン・画面制御 ---
 def show_login_screen():
     st.title("🐨 ストックコアラ v2")
+
+    # 1. 新規登録直後のLINE連携フロー中なら、タブを出さずに連携画面だけ表示
+    if "new_user_created" in st.session_state:
+        show_line_linking_flow(st.session_state.new_user_created)
+        # 連携をスキップ/完了したら、セッションをクリアしてログイン画面に戻るロジックが必要
+        return
     
-    # ここで tab1 と tab2 を定義しています
+    # 2. 通常のログイン/新規登録タブ
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
     
     with tab1:
@@ -483,20 +491,15 @@ def show_login_screen():
                     st.error("ログイン失敗：ユーザー名またはパスワードが正しくありません")
 
     with tab2:
-        # 新規登録後のLINE連携フラグ
-        if "new_user_created" not in st.session_state:
-            with st.form("signup"):
-                new_un, new_pw = st.text_input("新ユーザー名"), st.text_input("パスワード", type="password")
-                if st.form_submit_button("アカウント作成"):
-                    new_gid = str(uuid.uuid4())[:8]
-                    with engine.begin() as conn:
-                        conn.execute(text("INSERT INTO users (username, password, group_id, role) VALUES (:un, :pw, :gid, :r)"),
-                                     {"un": new_un, "pw": hash_data(new_pw), "gid": new_gid, "r": 'user'})
-                    st.session_state.new_user_created = new_un
-                    st.rerun()
-        else:
-            # 連携フローを表示
-            show_line_linking_flow(st.session_state.new_user_created)
+        with st.form("signup"):
+            new_un, new_pw = st.text_input("新ユーザー名"), st.text_input("パスワード", type="password")
+            if st.form_submit_button("アカウント作成"):
+                new_gid = str(uuid.uuid4())[:8]
+                with engine.begin() as conn:
+                    conn.execute(text("INSERT INTO users (username, password, group_id, role) VALUES (:un, :pw, :gid, :r)"),
+                                {"un": new_un, "pw": hash_data(new_pw), "gid": new_gid, "r": 'user'})
+                st.session_state.new_user_created = new_un
+                st.rerun()
 
 def main():
     # 1.必ずこれが一番最初！
