@@ -9,9 +9,6 @@ from bs4 import BeautifulSoup
 import uuid
 import hashlib
 import urllib.parse
-from fastapi import FastAPI, Request
-import uvicorn
-from threading import Thread
 import time
 
 # --- データベース接続設定 ---
@@ -389,44 +386,47 @@ def show_line_linking_flow(username):
             st.rerun()
 
     elif st.session_state.link_status == "waiting":
-        st.info("以下の手順で操作してください：")
+        st.subheader("IDをコピーして貼り付けてください")
         st.markdown("""
-        1. 公式アカウントを**友だち追加**する（下のQRコードから）
-        2. トーク画面で **「hello」** と送信する
-        3. 送信後、下の **「送信しました」** ボタンを押す
+        **【IDの取得手順】**
+        1. 下のQRコードから公式アカウントを**友だち追加**してください。
+        2. トーク画面で適当にスタンプや文字を送ってください。
+        3. ID（Uから始まる文字列）が返信されるので、**長押ししてコピー**してください。
         """)
         
         # QRコード表示（LINE Developersから取得したURLを入れる）
         st.image("QRcode_LINE.png", width=250)
-        
-        if st.button("✅ メッセージを送信しました"):
-            # 「一時預かり所」をチェック（直近2分以内のデータを探す）
-            now = datetime.now()
-            found_id = None
-            
-            # キューを新しい順に確認
-            for entry in reversed(st.session_state.webhook_queue):
-                if (now - entry["received_at"]).seconds < 120:
-                    found_id = entry["user_id"]
-                    break
-            
-            if found_id:
-                hashed_id = hash_data(found_id)
-                # DBに保存
+
+        # --- ID入力エリア ---
+        line_id_input = st.text_input("ここにコピーしたLINE IDを貼り付けてください", 
+                                     placeholder="U1234567890abcdef...",
+                                     help="LINEで返ってきた 'U' から始まる英数字です")
+
+        if st.button("🚀 連携を完了する"):
+            # 入力バリデーション（空でないか、Uで始まっているか）
+            if line_id_input and line_id_input.startswith("U"):
+                hashed_id = hash_data(line_id_input)
+                
                 try:
                     with engine.begin() as conn:
+                        # usersテーブルのline_user_idを更新
                         conn.execute(text("UPDATE users SET line_user_id = :lid WHERE username = :un"),
                                      {"lid": hashed_id, "un": username})
+                    
                     st.success("🎉 LINE連携が完了しました！")
-                    time.sleep(2)
-                    del st.session_state.new_user_created
+                    time.sleep(1.5)
+                    
+                    # ログイン状態へ移行
+                    if "new_user_created" in st.session_state:
+                        del st.session_state.new_user_created
                     st.session_state.logged_in = True
                     st.rerun()
+                    
                 except Exception as e:
                     st.error(f"DB保存エラー: {e}")
             else:
-                st.error("メッセージが確認できませんでした。公式アカウントに「hello」と送りましたか？")
-                st.caption("※サーバーに届くまで数秒かかる場合があります。少し待ってから再度押してください。")
+                st.error("正しいLINE IDを入力してください（Uから始まる文字列です）")
+
                 
 # --- ログイン・画面制御 ---
 def show_login_screen():
@@ -478,15 +478,10 @@ def show_login_screen():
                 st.rerun()
 
 def main():
-    # 1.必ずこれが一番最初！
+    # 必ずこれが一番最初！
     st.set_page_config(page_title="Smart Stock", layout="wide")
-
-    # --- これを追加：キューの初期化（エラー防止） ---
-    if 'webhook_queue' not in st.session_state:
-        st.session_state.webhook_queue = []
-    # ------------------------------------------
         
-    # 4.ログインチェックと画面表示
+    # ログインチェックと画面表示
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     if 'is_admin' not in st.session_state: 
