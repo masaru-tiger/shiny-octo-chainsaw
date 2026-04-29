@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from PIL import Image
 from pyzbar.pyzbar import decode
 import requests
@@ -9,6 +9,10 @@ from bs4 import BeautifulSoup
 import uuid
 import hashlib
 import urllib.parse
+from fastapi import FastAPI, Request
+import uvicorn
+from threading import Thread
+import time
 
 # --- データベース接続設定 ---
 def init_connection():
@@ -30,9 +34,45 @@ def init_connection():
 
 engine = init_connection()
 
-# --- セキュリティ ---
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+# ==========================================
+# セキュリティ & ハッシュ化の設定
+# ==========================================
+SALT = "koala_secure_2026"  # 共通のソルト（秘密の合言葉）
+
+def hash_data(raw_string):
+    """
+    パスワードやLINE IDなど、すべての秘匿情報を
+    共通のソルトを加えてハッシュ化する
+    """
+    if not raw_string:
+        return ""
+    return hashlib.sha256((raw_string + SALT).encode()).hexdigest()
+
+# ==========================================
+# FastAPI (Webhook受信用) の設定
+# ==========================================
+api = FastAPI()
+
+@api.post("/webhook")
+async def line_webhook(request: Request):
+    body = await request.json()
+    try:
+        for event in body.get("events", []):
+            if event["type"] == "message":
+                user_id = event["source"]["userId"]
+                # 到着時刻と共にキューに保存
+                st.session_state.webhook_queue.append({
+                    "user_id": user_id,
+                    "received_at": datetime.now()
+                })
+    except Exception:
+        pass
+    return {"status": "ok"}
+
+def start_webhook_server():
+    # Streamlitとは別のポート(8000)でWebサーバーを起動
+    uvicorn.run(api, host="0.0.0.0", port=8000)
+
 
 # --- 自動計算ロジック ---
 def update_inventory_by_time(group_id):
@@ -350,6 +390,67 @@ def show_admin_tool():
     except Exception as e:
         st.error(f"エラーが発生しました: {e}")
 
+
+# ==========================================
+# LINE連携 案内画面 (UI)
+# ==========================================
+def show_line_linking_flow(username):
+    st.title("🔗 LINE連携の設定")
+    
+    # セッション状態の管理
+    if "link_status" not in st.session_state:
+        st.session_state.link_status = "ask"
+
+    if st.session_state.link_status == "ask":
+        st.write(f"**{username}** さん、アカウント作成ありがとうございます！")
+        st.write("在庫が少なくなった時にLINEで通知を受け取れるようにしますか？")
+        c1, c2 = st.columns(2)
+        if c1.button("はい、連携する"):
+            st.session_state.link_status = "waiting"
+            st.rerun()
+        if c2.button("今はしない（ダッシュボードへ）"):
+            st.session_state.logged_in = True
+            st.rerun()
+
+    elif st.session_state.link_status == "waiting":
+        st.info("以下の手順で操作してください：")
+        st.markdown("""
+        1. 公式アカウントを**友だち追加**する（下のQRコードから）
+        2. トーク画面で **「hello」** と送信する
+        3. 送信後、下の **「送信しました」** ボタンを押す
+        """)
+        
+        # QRコード表示（LINE Developersから取得したURLを入れる）
+        st.image("https://qr-official.line.me/sid/L/your_bot_id.png", width=250)
+        
+        if st.button("✅ メッセージを送信しました"):
+            # 「一時預かり所」をチェック（直近2分以内のデータを探す）
+            now = datetime.now()
+            found_id = None
+            
+            # キューを新しい順に確認
+            for entry in reversed(st.session_state.webhook_queue):
+                if (now - entry["received_at"]).seconds < 120:
+                    found_id = entry["user_id"]
+                    break
+            
+            if found_id:
+                hashed_id = hash_data(found_id)
+                # DBに保存
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("UPDATE users SET line_user_id = :lid WHERE username = :un"),
+                                     {"lid": hashed_id, "un": username})
+                    st.success("🎉 LINE連携が完了しました！")
+                    time.sleep(2)
+                    st.session_state.logged_in = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"DB保存エラー: {e}")
+            else:
+                st.error("メッセージが確認できませんでした。公式アカウントに「hello」と送りましたか？")
+                st.caption("※サーバーに届くまで数秒かかる場合があります。少し待ってから再度押してください。")
+                
 # --- ログイン・メイン制御 ---
 def show_login_screen():
     st.title("🐨 ストックコアラ v2")
@@ -358,7 +459,7 @@ def show_login_screen():
         with st.form("login"):
             un, pw = st.text_input("ユーザー名"), st.text_input("パスワード", type="password")
             if st.form_submit_button("ログイン"):
-                # 【修正箇所】管理者ログイン判定を admin / admin に変更
+                # 管理者ログイン判定＝ admin / admin
                 if un == "admin" and pw == "admin":
                     st.session_state.logged_in = True
                     st.session_state.is_admin = True
@@ -370,27 +471,44 @@ def show_login_screen():
                 with engine.connect() as conn:
                     row = conn.execute(text("SELECT id, username, password, group_id, role FROM users WHERE username=:un"), {"un": un}).fetchone()
                 
-                if row and row[2] == hash_password(pw):
+                if row and row[2] == hash_data(pw):
                     st.session_state.logged_in, st.session_state.is_admin = True, False
                     st.session_state.user_info = {'id': row[0], 'username': row[1], 'group_id': row[3], 'role': row[4]}
                     st.session_state.view_group_id = row[3]
                     st.rerun()
                 else: 
                     st.error("ログイン失敗：ユーザー名またはパスワードが正しくありません")
-    with tab2:
-        with st.form("signup"):
-            new_un, new_pw = st.text_input("新ユーザー名"), st.text_input("パスワード", type="password")
-            if st.form_submit_button("作成"):
-                new_gid = str(uuid.uuid4())[:8]
-                with engine.begin() as conn:
-                    conn.execute(text("INSERT INTO users (username, password, group_id, role) VALUES (:un, :pw, :gid, :r)"),
-                                 {"un": new_un, "pw": hash_password(new_pw), "gid": new_gid, "r": 'user'})
-                st.success("作成完了")
+with tab2:
+        # 新規登録後のLINE連携フラグ
+        if "new_user_created" not in st.session_state:
+            with st.form("signup"):
+                new_un, new_pw = st.text_input("新ユーザー名"), st.text_input("パスワード", type="password")
+                if st.form_submit_button("アカウント作成"):
+                    new_gid = str(uuid.uuid4())[:8]
+                    with engine.begin() as conn:
+                        conn.execute(text("INSERT INTO users (username, password, group_id, role) VALUES (:un, :pw, :gid, :r)"),
+                                     {"un": new_un, "pw": hash_data(new_pw), "gid": new_gid, "r": 'user'})
+                    st.session_state.new_user_created = new_un
+                    st.rerun()
+        else:
+            # 連携フローを表示
+            show_line_linking_flow(st.session_state.new_user_created)
 
 def main():
+    # グローバルな「一時預かり所」　※メインで実装することで確実に実行する 
+    if "webhook_queue" not in st.session_state:
+        st.session_state.webhook_queue = []
+    # FastAPIサーバーをバックグラウンドで1回だけ起動
+    if "api_started" not in st.session_state:
+        thread = Thread(target=start_webhook_server, daemon=True)
+        thread.start()
+        st.session_state.api_started = True
+        
     st.set_page_config(page_title="Smart Stock", layout="wide")
-    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-    if 'is_admin' not in st.session_state: st.session_state.is_admin = False
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'is_admin' not in st.session_state: 
+        st.session_state.is_admin = False
     
     if not st.session_state.logged_in:
         show_login_screen()
