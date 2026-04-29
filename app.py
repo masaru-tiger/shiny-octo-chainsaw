@@ -48,31 +48,6 @@ def hash_data(raw_string):
         return ""
     return hashlib.sha256((raw_string + SALT).encode()).hexdigest()
 
-# ==========================================
-# FastAPI (Webhook受信用) の設定
-# ==========================================
-api = FastAPI()
-
-@api.post("/webhook")
-async def line_webhook(request: Request):
-    body = await request.json()
-    try:
-        for event in body.get("events", []):
-            if event["type"] == "message":
-                user_id = event["source"]["userId"]
-                # 到着時刻と共にキューに保存
-                st.session_state.webhook_queue.append({
-                    "user_id": user_id,
-                    "received_at": datetime.now()
-                })
-    except Exception:
-        pass
-    return {"status": "ok"}
-
-def start_webhook_server():
-    # Streamlitとは別のポート(8000)でWebサーバーを起動
-    # uvicorn.run(api, host="0.0.0.0", port=8000)
-
 
 # --- 自動計算ロジック ---
 def update_inventory_by_time(group_id):
@@ -504,16 +479,11 @@ def show_login_screen():
 def main():
     # 1.必ずこれが一番最初！
     st.set_page_config(page_title="Smart Stock", layout="wide")
-    
-    # 2.グローバルな「一時預かり所」　※メインで実装することで確実に実行する 
-    if "webhook_queue" not in st.session_state:
-        st.session_state.webhook_queue = []
 
-    # 3.FastAPIサーバーをバックグラウンドで1回だけ起動
-    if "api_started" not in st.session_state:
-        thread = Thread(target=start_webhook_server, daemon=True)
-        thread.start()
-        st.session_state.api_started = True
+    # --- これを追加：キューの初期化（エラー防止） ---
+    if 'webhook_queue' not in st.session_state:
+        st.session_state.webhook_queue = []
+    # ------------------------------------------
         
     # 4.ログインチェックと画面表示
     if 'logged_in' not in st.session_state:
